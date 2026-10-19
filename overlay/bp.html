@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WROB · BP 面板</title>
+<link rel="stylesheet" href="/common/base.css">
+<link rel="stylesheet" href="/overlay/overlay.css">
+<link rel="stylesheet" href="/overlay/bp.css">
+</head>
+<body>
+<!--
+  OBS 浏览器源：宽 1920、高 1080。上方透明，下方 340px 是 BP 面板。
+  地址后面加 ?bg=1 会铺一层不透明的背景和对阵标题（没有别的画面可垫时用）。
+-->
+<div class="stage" id="stage">
+    <div class="backdrop" id="backdrop" hidden>
+        <div class="backdrop-title" id="backdrop-title"></div>
+        <div class="backdrop-versus">
+            <div class="backdrop-team blue"><span class="logo"><img alt=""></span><b></b></div>
+            <div class="backdrop-score num"><span></span><i>:</i><span></span></div>
+            <div class="backdrop-team red"><span class="logo"><img alt=""></span><b></b></div>
+        </div>
+        <div class="backdrop-meta" id="backdrop-meta"></div>
+    </div>
+
+    <section class="band" id="band" data-status="idle">
+        <div class="timebar"><i class="fill blue"></i><i class="fill red"></i></div>
+
+        <div class="team blue" data-side="blue">
+            <header class="team-head">
+                <div class="bans"></div>
+                <div class="team-id">
+                    <div class="team-text"><b class="team-short"></b><span class="team-name"></span></div>
+                    <span class="logo"><img alt=""></span>
+                </div>
+                <div class="score num"></div>
+            </header>
+            <div class="picks"></div>
+        </div>
+
+        <div class="center">
+            <div class="event" id="event"></div>
+            <div class="phase" id="phase"></div>
+            <div class="timer num" id="timer"></div>
+            <div class="meta" id="meta"></div>
+            <div class="history" id="history"></div>
+        </div>
+
+        <div class="team red" data-side="red">
+            <header class="team-head">
+                <div class="bans"></div>
+                <div class="team-id">
+                    <div class="team-text"><b class="team-short"></b><span class="team-name"></span></div>
+                    <span class="logo"><img alt=""></span>
+                </div>
+                <div class="score num"></div>
+            </header>
+            <div class="picks"></div>
+        </div>
+    </section>
+</div>
+<script src="/common/client.js"></script>
+<script src="/common/champions.js"></script>
+<script src="/overlay/overlay.js"></script>
+<script src="/overlay/bp.js"></script>
+</body>
+</html>

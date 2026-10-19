@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WROB 导播台</title>
+<link rel="stylesheet" href="/common/base.css">
+<link rel="stylesheet" href="/director/director.css">
+</head>
+<body>
+<header class="topbar">
+    <div class="brand">WROB <span>导播台</span></div>
+    <nav class="tabs" id="tabs">
+        <button type="button" data-tab="bp" class="is-on">BP</button>
+        <button type="button" data-tab="game">局内</button>
+        <button type="button" data-tab="setup">赛事设置</button>
+    </nav>
+    <div class="matchline" id="matchline"></div>
+    <div class="conn" id="conn">连接中…</div>
+</header>
+
+<main>
+    <!-- ================= BP ================= -->
+    <section class="tab" id="tab-bp">
+        <div class="flow">
+            <div class="flow-status">
+                <div class="flow-phase" id="bp-phase"></div>
+                <div class="flow-target" id="bp-target"></div>
+            </div>
+            <div class="flow-timer">
+                <span class="num" id="bp-timer">–</span>
+                <button type="button" id="bp-timer-toggle" title="暂停 / 继续倒计时">暂停</button>
+                <button type="button" id="bp-timer-reset" title="这一手重新读秒">重置</button>
+            </div>
+            <div class="flow-actions" id="bp-actions"></div>
+        </div>
+
+        <!-- 两支队伍：队名、选手 ID。左边永远是本局蓝方，右边是红方。 -->
+        <div class="team-forms">
+            <div class="team-form blue" id="bp-team-blue"></div>
+            <button type="button" class="swap-sides" id="bp-swap-sides" title="交换红蓝方">⇄</button>
+            <div class="team-form red" id="bp-team-red"></div>
+        </div>
+
+        <!-- BP：每个槽位一个输入框（打字检索或点开下拉选），中间的格子用来直接点选。 -->
+        <div class="bp-grid">
+            <aside class="side blue" id="bp-blue"></aside>
+
+            <div class="bp-center">
+                <div class="palette-head">
+                    <span id="bp-palette-hint"></span>
+                    <label class="check" title="勾上后：选英雄只是在面板上亮出来（预选），再按回车才锁定">
+                        <input type="checkbox" id="bp-two-step"> 先预选，回车再锁定
+                    </label>
+                </div>
+                <div class="champ-grid" id="bp-grid"></div>
+            </div>
+
+            <aside class="side red" id="bp-red"></aside>
+        </div>
+
+        <div class="bp-foot">
+            <div class="result" id="bp-result"></div>
+            <div class="foot-actions">
+                <button type="button" id="bp-undo" title="Ctrl / ⌘ + Z">撤销</button>
+                <button type="button" id="bp-reset" class="danger">重置本局 BP</button>
+            </div>
+        </div>
+
+        <details class="preview" open>
+            <summary>面板预览（和 OBS 里看到的一样）</summary>
+            <div class="preview-frame"><iframe src="/overlay/bp.html?bg=1" title="BP 面板预览" tabindex="-1"></iframe></div>
+        </details>
+    </section>
+
+    <!-- ================= 局内 ================= -->
+    <section class="tab" id="tab-game" hidden>
+        <div class="game-grid">
+            <div class="card" id="game-clock"></div>
+            <div class="card" id="game-score"></div>
+            <div class="card" id="game-objectives"></div>
+            <div class="card" id="game-fx"></div>
+            <div class="card wide" id="game-finish"></div>
+            <div class="card wide" id="game-players"></div>
+        </div>
+        <details class="preview">
+            <summary>面板预览</summary>
+            <div class="preview-frame phone"><iframe data-src="/overlay/game.html?bg=1" title="局内面板预览" tabindex="-1"></iframe></div>
+        </details>
+    </section>
+
+    <!-- ================= 赛事设置 ================= -->
+    <section class="tab" id="tab-setup" hidden>
+        <div class="setup-grid">
+            <div class="card" id="setup-series"></div>
+            <div class="card" id="setup-team-a"></div>
+            <div class="card" id="setup-team-b"></div>
+            <div class="card wide" id="setup-misc"></div>
+        </div>
+    </section>
+</main>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/common/client.js"></script>
+<script src="/common/champions.js"></script>
+<script src="/director/app.js"></script>
+<script src="/director/bp.js"></script>
+<script src="/director/game.js"></script>
+<script src="/director/setup.js"></script>
+</body>
+</html>

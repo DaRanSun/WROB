@@ -1,0 +1,27 @@
+# 面板特效：连杀、出装提示、野怪 / 龙魂播报。改完重启服务生效。
+
+# 多杀以游戏自己的播报为准（“红方二连破”…“五连破”），识别服务读到就放；游戏用五连破“吞掉”四连破时直接放五杀。
+
+# 每种特效在面板上停多久（秒）
+hold:
+  double: 3.0
+  triple: 3.5
+  quadra: 4.0
+  penta: 6.0
+  item: 2.0           # 传说装图标盖住头像；一次出了好几件就轮流，每件这么久
+  objective: 2.5      # 野怪 / 龙魂播报：在右上角显示这么久，然后淡出、换回原来的内容
+
+# 播报的文字（{team} 是队名，{side} 是“蓝方 / 红方”，{dragon} / {soul} 是按属性换的名字）。
+# [待用户提供] 正式的文字和美术，现在是占位。
+texts:
+  dragon: "{team} 击败 {dragon}"
+  herald: "{team} 击败 峡谷先锋"
+  baron: "{team} 击败 纳什男爵"
+  elder: "{team} 击败 远古巨龙"
+  soul: "{team} 获得 {soul}"
+  soul_element: "本局龙魂：{soul}"         # 第一条小龙的属性就是这一局龙魂的属性，一知道就播一次
+
+dragons:
+  infernal: { dragon: 炼狱亚龙, soul: 炼狱龙魂 }
+  mountain: { dragon: 山脉亚龙, soul: 山脉龙魂 }
+  ocean:    { dragon: 海洋亚龙, soul: 海洋龙魂 }

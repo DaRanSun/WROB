@@ -1,0 +1,13 @@
+# WROB 的独立环境：conda env create -f environment.yml
+# 之后每次开终端先 conda activate wrob。
+# ffmpeg / ffprobe 来自 conda-forge；scrcpy 和 adb 不在 conda 里，用 tools/install_scrcpy.sh 装进这个环境。
+name: wrob
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.14
+  - pip
+  - ffmpeg
+  - pip:
+      - -r requirements.txt

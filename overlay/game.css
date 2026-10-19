@@ -1,0 +1,414 @@
+/* 局内面板。所有尺寸按 2800×1264 的手机画面写：顶部的战队面板 + 底部的对位面板，其余全透明。
+   样式参考 LPL 的观赛界面：黑底、白字、窄体数字，颜色只留给阵营和经济。 */
+
+:root {
+    /* 顶部战队面板。游戏自带的顶部条在横向 1040–1790、纵向到 125（含时钟），这里比它宽、比它高，正好盖住。
+       左上角的小地图到横向 585 为止，所以面板居中、宽度不超过 1620，不碰到它。 */
+    --topbar-width: 1600px;
+    --topbar-scale: 1;
+    --main-center: 50%;                 /* 三块面板的水平中心 */
+    --topbar-main: 92px;                /* 第一行：队伍、经济、人头 */
+    --topbar-sub: 46px;                 /* 第二行：时间和元素龙 */
+    --topbar-center: 300px;
+
+    /* 底部对位面板。先按“一行 56 高”排版，再整体放大 --matchups-scale 倍贴在画面底边。
+       双设备（纯净画面）：全部内容，宽 1700 × 1.3 = 2210，高 364。
+       单设备：不要等级、召唤师技能和大招，宽 1500 × 1.45 = 2175，高 406——正好盖住原生的底部面板和时间轴
+       （纵向 856 起），又不碰到两侧的选手卡片（横向 300 以内、2500 以外）。 */
+    --matchups-width: 1700px;
+    --matchups-scale: 1.3;
+    --row-height: 56px;
+    --item-size: 44px;
+
+    --timers-top: 150px;
+
+    /* 两块面板的底色不留透明度：观战机带着原生界面时，下面的字不能透上来。 */
+    --surface: #06080c;
+    --surface-2: #0e121a;
+    --hairline: rgba(255, 255, 255, 0.09);
+    --coin: #f2c66a;
+    --infernal: #ff7a45;
+    --mountain: #c79a62;
+    --ocean: #3fd0c9;
+}
+
+.stage[data-mode="single"] { --matchups-width: 1500px; --matchups-scale: 1.45; }
+
+/* 双设备：画布 1920×1080，面板一点都不压画面。
+     顶部一条 0–90：战队面板整体缩到 0.652（第一行 92 → 60，第二行 46 → 30），居中宽 1200；buff 牌子在第二行的两端。
+     中间 90–870：1920×780 的空白，OBS 里放观战机的纯净画面（32:13，模拟器设成 2560×1040 或 1920×780）。
+     底部一条 870–1080：对位面板一行 56 → 42（缩到 0.75），居中宽 1620，两侧各留 150 的空白（以后放多杀、连杀、
+     数据对比、打龙的特效）。选手名、KDA、经济排成一行、字放大：名字最长 7 个字，KDA 和经济各占固定宽度，五行上下对齐。
+     两条面板两侧空出来的地方由 .band 用同样的底色补满。 */
+.stage[data-mode="dual"] {
+    --topbar-width: 1840px;             /* × 0.652 = 1200 */
+    --topbar-scale: 0.652;
+    --matchups-width: 2160px;           /* × 0.75 = 1620 */
+    --matchups-scale: 0.75;
+    --lane-name: 224px;                 /* 7 个汉字 */
+    --lane-kda: 140px;
+    --lane-gold: 118px;
+}
+.stage[data-mode="dual"] .lane-side { gap: 9px; }
+.stage[data-mode="dual"] .lane-text {
+    flex: none;
+    grid-template-columns: var(--lane-name) var(--lane-kda) var(--lane-gold);
+    grid-template-rows: 1fr;
+    column-gap: 14px;
+    padding: 0 12px 0 4px;
+}
+.stage[data-mode="dual"] .lane-side.red .lane-text {
+    grid-template-columns: var(--lane-gold) var(--lane-kda) var(--lane-name);
+    padding: 0 4px 0 12px;
+}
+.stage[data-mode="dual"] .lane-name { grid-row: 1; grid-column: 1; font-size: 31px; }
+.stage[data-mode="dual"] .lane-kda { grid-row: 1; grid-column: 2; font-size: 31px; font-weight: 600; text-align: center; }
+.stage[data-mode="dual"] .lane-gold { grid-row: 1; grid-column: 3; font-size: 33px; text-align: right; }
+.stage[data-mode="dual"] .lane-side.red .lane-name { grid-column: 3; text-align: right; }
+.stage[data-mode="dual"] .lane-side.red .lane-kda { grid-column: 2; text-align: center; }
+.stage[data-mode="dual"] .lane-side.red .lane-gold { grid-column: 1; text-align: left; }
+.stage[data-mode="dual"] .lane-row { grid-template-columns: 1fr 150px 1fr; }
+.stage[data-mode="dual"] .lane-mid { font-size: 33px; }
+.band { display: none; }
+.stage[data-mode="dual"] .band { display: block; position: absolute; left: 0; right: 0; background: var(--surface); }
+.stage[data-mode="dual"] .band-top { top: 0; height: 90px; border-bottom: 1px solid var(--hairline); }
+.stage[data-mode="dual"] .band-bottom { bottom: 0; height: 210px; border-top: 1px solid var(--hairline); }
+.stage[data-mode="dual"] .topbar { filter: none; clip-path: inset(0); }     /* 龙魂的光晕也不许溢到画面上 */
+.stage[data-mode="dual"] .matchups { box-shadow: none; }
+.stage[data-mode="dual"] .timers {
+    top: 0;
+    padding: var(--topbar-main) 24px 0;
+    transform: translateX(-50%) scale(var(--topbar-scale));
+    transform-origin: 50% 0;
+}
+.stage[data-mode="dual"] .chip { height: var(--topbar-sub); border-radius: 0; box-shadow: none; }
+.stage[data-mode="single"] .lane-spells,
+.stage[data-mode="single"] .lane-ult,
+.stage[data-mode="single"] .lane-level { display: none; }
+
+.fake-game {
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(1000px 700px at 30% 60%, #4d6a52, transparent 70%),
+        radial-gradient(1200px 700px at 75% 40%, #58694a, transparent 70%),
+        #2f3e36;
+}
+.fake-game[hidden] { display: none; }
+
+.icon { display: inline-flex; flex: none; }
+.icon svg, .dragon svg { width: 100%; height: 100%; display: block; }
+
+/* ================= 顶部：战队面板 ================= */
+
+.topbar {
+    position: absolute;
+    top: 0;
+    left: var(--main-center);
+    width: var(--topbar-width);
+    transform: translateX(-50%) scale(var(--topbar-scale));
+    transform-origin: 50% 0;
+    filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.55));
+}
+
+.tb-main {
+    display: grid;
+    grid-template-columns: 1fr var(--topbar-center) 1fr;
+    height: var(--topbar-main);
+    background: var(--surface);
+}
+
+.tb-team {
+    --side: var(--blue);
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    min-width: 0;
+    padding-right: 26px;
+}
+.tb-team.red { --side: var(--red); flex-direction: row-reverse; padding: 0 0 0 26px; }
+
+.tb-edge { align-self: stretch; flex: none; width: 10px; background: var(--side); }
+.tb-team .logo { width: 68px; height: 68px; border-radius: 8px; }
+
+.tb-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.tb-team.red .tb-id { align-items: flex-end; }
+.tb-name {
+    max-width: 100%;
+    font-family: var(--font-num);
+    font-size: 46px;
+    line-height: 1;
+    letter-spacing: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* 系列赛里已经赢了几场：赢一场亮一格 */
+.tb-pips { display: flex; gap: 6px; height: 9px; }
+.tb-team.red .tb-pips { flex-direction: row-reverse; }
+.tb-pips i { width: 30px; height: 9px; background: rgba(255, 255, 255, 0.16); transform: skewX(-18deg); }
+.tb-pips i.is-won { background: var(--side); box-shadow: 0 0 10px var(--side); }
+
+.tb-stat { display: flex; align-items: center; gap: 8px; flex: none; }
+.tb-stat .icon { width: 30px; height: 30px; color: #a9a08a; }
+.tb-stat b { min-width: 26px; font-size: 44px; line-height: 1; text-align: center; }
+
+.tb-gold { flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 190px; }
+.tb-gold-value { display: flex; align-items: center; gap: 8px; }
+.tb-team.red .tb-gold-value { flex-direction: row-reverse; }
+.tb-gold-value .icon { width: 32px; height: 32px; color: #a9a08a; }
+.tb-gold-value b { font-size: 44px; line-height: 1; }
+.tb-lead { height: 24px; font-size: 24px; font-weight: 700; line-height: 24px; color: var(--side); }
+
+.tb-center {
+    display: grid;
+    grid-template-columns: 1fr 76px 1fr;
+    align-items: center;
+    background: var(--surface-2);
+}
+.tb-kills { font-size: 78px; font-weight: 700; line-height: 1; }
+.tb-kills.blue { text-align: right; padding-right: 14px; }
+.tb-kills.red { text-align: left; padding-left: 14px; }
+.tb-mark { display: flex; flex-direction: column; align-items: center; gap: 2px; color: var(--text-dim); }
+.tb-mark b { font-family: var(--font-num); font-size: 30px; line-height: 1; color: var(--gold); }
+.tb-mark i { font-style: normal; font-size: 16px; letter-spacing: 1px; }
+
+.tb-sub {
+    display: grid;
+    grid-template-columns: 1fr var(--topbar-center) 1fr;
+    align-items: center;
+    height: var(--topbar-sub);
+    background: var(--surface);
+    border-top: 1px solid var(--hairline);
+}
+.tb-clock { font-size: 36px; font-weight: 700; line-height: 1; text-align: center; }
+.tb-clock.is-paused { color: var(--text-dim); }
+.tb-dragons { display: flex; align-items: center; gap: 12px; padding: 0 24px; }
+.tb-dragons.blue { justify-content: flex-end; }
+.tb-dragons.red { justify-content: flex-start; }
+.dragon { display: inline-flex; width: 34px; height: 34px; color: var(--gold); }
+.dragon.infernal { color: var(--infernal); }
+.dragon.mountain { color: var(--mountain); }
+.dragon.ocean { color: var(--ocean); }
+.dragon img { width: 100%; height: 100%; object-fit: contain; }
+.tb-dragons.has-soul .dragon { filter: drop-shadow(0 0 8px currentColor); animation: soul 1.6s ease-in-out infinite; }
+@keyframes soul { 50% { filter: drop-shadow(0 0 14px currentColor) brightness(1.4); } }
+
+/* ================= 野怪计时牌（默认关） ================= */
+
+.timers {
+    position: absolute;
+    top: var(--timers-top);
+    left: var(--main-center);
+    width: var(--topbar-width);
+    box-sizing: border-box;
+    transform: translateX(-50%);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+    gap: 14px;
+    transition: opacity 0.3s;
+}
+.timers.is-off { opacity: 0; }
+.buffs { display: flex; gap: 12px; }
+.buffs.blue { justify-content: flex-start; }
+.buffs.red { justify-content: flex-end; }
+
+.chip {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 46px;
+    padding: 0 18px;
+    font-size: 22px;
+    white-space: nowrap;
+    background: var(--surface);
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.chip[hidden] { display: none; }
+.chip b { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 28px; }
+.chip.buff { --side: var(--blue); color: #fff; background: color-mix(in srgb, var(--side) 55%, #05070c); }
+.buffs.red .chip.buff { --side: var(--red); }
+.chip.buff .gain { padding-left: 12px; border-left: 2px solid rgba(255, 255, 255, 0.3); color: var(--coin); font-family: var(--font-num); font-size: 25px; }
+.chip.buff.is-over { opacity: 0.75; }
+@keyframes chip-pulse { 50% { filter: brightness(1.5); } }
+
+/* ================= 底部：对位面板 =================
+   每行从外到内：6 格装备（最外一格是鞋子）、英雄头像、选手名 + 经济（上）和 KDA（下），中间是对位经济差。 */
+
+.matchups {
+    position: absolute;
+    bottom: 0;
+    left: var(--main-center);
+    width: var(--matchups-width);
+    transform-origin: 50% 100%;
+    transform: translateX(-50%) scale(var(--matchups-scale));
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.5);
+    transition: opacity 0.3s, transform 0.3s;
+}
+.matchups[hidden], .matchups.is-collapsed {
+    display: flex;
+    opacity: 0;
+    transform: translateX(-50%) translateY(60px) scale(var(--matchups-scale));
+    pointer-events: none;
+}
+
+.lane-row {
+    display: grid;
+    grid-template-columns: 1fr 170px 1fr;
+    height: var(--row-height);
+    border-top: 1px solid var(--hairline);
+}
+
+.lane-side {
+    --side: var(--blue);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    padding-left: 10px;
+}
+.lane-side.red { --side: var(--red); flex-direction: row-reverse; padding: 0 10px 0 0; }
+
+.lane-items { display: flex; gap: 3px; flex: none; }
+.lane-side.red .lane-items { flex-direction: row-reverse; }
+.lane-item {
+    width: var(--item-size);
+    height: var(--item-size);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.045);
+    overflow: hidden;
+}
+.lane-item img { width: 100%; height: 100%; display: block; }
+.lane-item, .lane-spell, .lane-rune { position: relative; flex: none; }
+
+/* 基石符文（圆的）和两个召唤师技能（上下排），在装备和头像之间 */
+.lane-rune { width: 34px; height: 34px; border-radius: 50%; overflow: hidden; }
+.lane-spells { display: flex; flex-direction: column; gap: 2px; flex: none; }
+.lane-spell { width: 24px; height: 24px; border-radius: 50%; overflow: hidden; }
+.lane-rune img, .lane-spell img { width: 100%; height: 100%; display: block; }
+.lane-side .lane-spells { margin: 0 -6px; }                /* 技能贴着头像和符文，不要整排 12px 的间距 */
+
+/* 大招：英雄的大招图标，圆的，和符文一样大。--done 是转好了多少（0–1）：没转好的那一段扇形盖着一层暗色 */
+.lane-ult { position: relative; flex: none; width: 34px; height: 34px; border-radius: 50%; overflow: hidden; background: #1a2030; }
+.lane-ult[hidden] { display: block; visibility: hidden; }     /* 五级前不显示，但位置留着，五行才对得齐 */
+.lane-ult img { width: 100%; height: 100%; display: block; filter: brightness(0.85); }
+.lane-ult-shade {
+    position: absolute;
+    inset: 0;
+    background: conic-gradient(transparent calc(var(--done, 1) * 1turn), rgba(4, 6, 10, 0.78) 0);
+}
+.lane-ult.is-ready img { filter: none; }
+.lane-ult.is-ready { box-shadow: 0 0 0 2px var(--side), 0 0 8px var(--side); }
+.lane-ult.no-icon img { visibility: hidden; }
+.lane-ult.no-icon::before { content: "R"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 20px; color: #fff; }
+
+/* 等级：头像靠里的下角 */
+.lane-level {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    min-width: 20px;
+    padding: 0 3px;
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 19px;
+    text-align: center;
+    color: #fff;
+    background: rgba(4, 6, 10, 0.82);
+}
+.lane-side.red .lane-level { right: auto; left: 0; }
+.lane-side.is-dead .lane-level { opacity: 0.6; }
+
+/* 冷却中：图标压暗，上面是剩余秒数（不知道多久的只压暗） */
+.is-cooling img { filter: brightness(0.5) saturate(0.75); }       /* 压暗但还认得出是哪一件 */
+.cd {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 700;
+    color: #fff;
+    text-shadow: 0 0 4px #000, 0 0 2px #000;
+}
+.lane-spell .cd { font-size: 15px; }
+/* 鞋子那一格和五格装备之间留一条缝 */
+.lane-side.blue .lane-item:first-child { margin-right: 7px; }
+.lane-side.red .lane-item:first-child { margin-left: 7px; }
+
+.lane-portrait {
+    position: relative;
+    flex: none;
+    width: 48px;
+    height: 48px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 0 0 2px var(--side);
+}
+.lane-portrait img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lane-respawn {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-num);
+    font-size: 30px;
+    font-weight: 700;
+    color: #ff5a67;
+    text-shadow: 0 0 6px #000, 0 0 2px #000;
+    opacity: 0;
+}
+.lane-side.is-dead .lane-portrait img { filter: grayscale(1) brightness(0.55); }
+.lane-side.is-dead .lane-portrait { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.25); }
+.lane-side.is-dead .lane-respawn { opacity: 1; }
+.lane-side.is-dead .lane-name { color: var(--text-dim); }
+
+.lane-text {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 27px 21px;
+    align-items: center;
+    column-gap: 10px;
+    padding: 0 16px 0 2px;
+}
+.lane-side.red .lane-text { grid-template-columns: auto minmax(0, 1fr); padding: 0 2px 0 16px; }
+.lane-name { grid-row: 1 / 3; font-size: 25px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lane-gold { font-size: 28px; font-weight: 700; line-height: 1; color: var(--coin); text-align: right; }
+.lane-kda { font-size: 22px; line-height: 1; color: #e7ebf2; text-align: right; }
+.lane-side.red .lane-name { grid-column: 2; text-align: right; }
+.lane-side.red .lane-gold, .lane-side.red .lane-kda { grid-column: 1; text-align: left; }
+
+/* 对位经济差：数字居中，领先的那一侧亮一条边、出一个箭头 */
+.lane-mid {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--text-dim);
+    background: var(--surface-2);
+    transition: color 0.4s;
+}
+.lane-mid[data-lead="blue"], .lane-mid[data-lead="red"] { color: #fff; }
+.lane-mid::before, .lane-mid::after {
+    content: "";
+    position: absolute;
+    top: 6px;
+    bottom: 6px;
+    width: 7px;
+    opacity: 0;
+    transition: opacity 0.4s;
+}
+.lane-mid::before { left: 0; background: var(--blue); clip-path: polygon(100% 0, 100% 100%, 0 50%); width: 16px; }
+.lane-mid::after { right: 0; background: var(--red); clip-path: polygon(0 0, 0 100%, 100% 50%); width: 16px; }
+.lane-mid[data-lead="blue"]::before, .lane-mid[data-lead="red"]::after { opacity: 1; }

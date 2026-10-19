@@ -1,0 +1,14 @@
+# 个别英雄图片的特殊处理。其余英雄直接用 WRPedia 的 <slug>.png（方形小图）
+# 和 <slug>-portrait.jpg（285×323 立绘）。
+#
+# portrait_focus / icon_focus：裁切焦点，写法同 CSS object-position。
+# icon: portrait      没有方形小图时，用立绘裁出小图。
+# icon_zoom           裁小图时再放大多少倍，让脸占满格子。
+
+hwei:
+  portrait_focus: "58% 18%"     # 只有 1280×720 横版原画
+
+norra:
+  icon: portrait                # WRPedia 里没有 norra.png
+  icon_focus: "40% 46%"
+  icon_zoom: 1.7

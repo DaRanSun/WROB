@@ -1,0 +1,35 @@
+/* 面板和导播台共用的颜色、字体。 */
+:root {
+    --blue: #2f9bff;
+    --blue-deep: #0d3b73;
+    --blue-soft: #8cc8ff;
+    --red: #ff4b5c;
+    --red-deep: #7a1420;
+    --red-soft: #ff9aa4;
+    --gold: #d8b871;
+    --gold-soft: #f0dfb4;
+    --ink: #05070c;
+    --panel: #0b101b;
+    --panel-2: #121927;
+    --panel-3: #1b2436;
+    --line: rgba(255, 255, 255, 0.10);
+    --text: #f2f5fa;
+    --text-dim: #9aa6b8;
+    --text-faint: #5d6a7e;
+
+    /* 数字用系统自带的 DIN 系（macOS: DIN Alternate；Windows: Bahnschrift），中文用苹方 / 雅黑。 */
+    --font-num: "DIN Alternate", "DIN Condensed", Bahnschrift, "Avenir Next Condensed", "Helvetica Neue", sans-serif;
+    --font-text: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+    font-family: var(--font-text);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+}
+
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }

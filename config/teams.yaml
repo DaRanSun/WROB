@@ -1,0 +1,13 @@
+# 自己赛事的战队预设，会排在 WRPedia 的 8 支 WRL 战队前面。
+# 也可以不写这里，直接在导播台里手填队名和选手。
+# logo 放进 WROB/assets/teams/，这里写文件名。
+
+teams: []
+
+# 示例：
+# teams:
+#   - id: ABC
+#     name: 某某战队
+#     short: ABC
+#     logo: abc.png
+#     players: { top: 上单ID, jungle: 打野ID, mid: 中单ID, bot: 射手ID, support: 辅助ID }

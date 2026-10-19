@@ -1,0 +1,39 @@
+# 野怪与 buff 规则，随版本更新。时间写 "分:秒"。
+# 数值来源：claude.md 第 4 节（用户确认的当前版本）。旧版本录像里的数值不同，不要照录像改。
+
+herald:
+  name: 峡谷先锋
+  first_spawn: "6:00"
+  respawn: null             # 击杀后不再刷新
+
+dragon:
+  name: 元素亚龙
+  first_spawn: "6:00"
+  respawn: "4:15"
+  despawn: "18:30"            # 到这个时间，场上的元素亚龙消失，之后也不再刷新
+  despawn_in_combat: "18:50"  # 消失的那一刻它正在挨打的话，延后到这个时间才消失
+  max_spawns: 3             # 远古巨龙出现前一共只刷三条：火龙、山龙（土龙）、海龙（水龙）各一条
+  soul_requires: 3          # 同一队拿下全部三条才有龙魂
+  elements: [infernal, mountain, ocean]
+
+baron:
+  name: 纳什男爵
+  first_spawn: "11:00"
+  respawn: "3:36"
+  buff: "2:00"
+  buff_lost_on_death: false
+
+elder:
+  name: 远古巨龙
+  first_spawn: "19:00"
+  respawn: "4:30"
+  buff: "2:00"
+  buff_lost_on_death: true
+
+# [待验证] 的边界情况，先做成开关。
+unverified:
+  # 击杀远古巨龙瞬间已阵亡的队员能否拿到 buff。
+  elder_buff_to_dead: false
+
+# 经济差领先方颜色的滞回：差值要越过这个数才换边，避免在 0 附近来回闪。
+lead_hysteresis: 50

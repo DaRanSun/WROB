@@ -1,0 +1,34 @@
+/* 两个面板共用：固定尺寸的画布，背景透明。 */
+html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+}
+
+/* 画布永远按设计尺寸排版（默认 1920×1080，页面可以在 .stage 上另行声明）。
+   OBS 里正好 1:1；在普通浏览器窗口里预览时由 overlay.js 等比缩放。 */
+.stage {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    transform-origin: 0 0;
+    user-select: none;
+}
+
+/* 队标素材里有深色的（ACE、RV），直接放在深色面板上看不见，所以统一垫一块浅色底。 */
+.logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    background: #f4f6fa;
+    border-radius: 6px;
+    overflow: hidden;
+}
+.logo img { width: 84%; height: 84%; object-fit: contain; }
+.logo.is-empty { background: rgba(255, 255, 255, 0.06); }
+.logo.is-empty img { display: none; }

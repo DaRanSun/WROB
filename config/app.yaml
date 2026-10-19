@@ -1,0 +1,16 @@
+# 服务配置。改完重启 `python3 -m server` 生效。
+
+host: 127.0.0.1        # 只让本机访问；要用平板/另一台电脑开导播台时改成 0.0.0.0
+port: 8780             # WRPedia 录入后台占用 8770
+
+# 英雄图、战队、选手资料直接读 WRPedia，不复制。相对路径以 WROB 目录为基准。
+wrpedia: ../WRPedia
+
+# 赛事默认值，导播台里可以随时改。
+defaults:
+  title: 英雄联盟手游 民间赛
+  stage: ""
+  brand: SUFE LOLM 26  # 局内面板角上的赛事标识（单设备在右上角，双设备在左上角），导播台“赛事设置”里可以改文字、换成图片
+  patch: ""
+  best_of: 3
+  fearless: global     # off = 不启用；team = 只锁本队用过的；global = 双边无畏（WRL 现行规则）

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>WROB · 局内面板</title>
+<link rel="stylesheet" href="/common/base.css">
+<link rel="stylesheet" href="/overlay/overlay.css">
+<link rel="stylesheet" href="/overlay/game.css">
+<link rel="stylesheet" href="/overlay/effects.css">
+<link rel="stylesheet" href="/overlay/postgame.css">
+</head>
+<body>
+<!--
+  画布和手机画面一样大：2800×1264，背景透明。观战机的画面全幅铺在下面，这一页叠在上面，只有两样东西：
+    · 顶部的战队面板：队标、队名、已赢的场数、推塔、团队经济、人头；领先的一方下面标着经济差；
+      第二行是比赛时间，两边是双方各自拿到的元素龙
+    · 底部的对位面板：五路各一行，从外到内是装备（鞋子在最外）、基石符文、两个召唤师技能、英雄头像、选手名和经济、KDA，
+      中间是对位经济差。头像角上是等级；阵亡的英雄头像变灰，上面是复活倒计时；冷却中的召唤师技能和装备压暗并倒数；
+      五级以后多一个大招图标，用掉后压暗，再像表针一样慢慢亮回来
+  两种画面模式（导播台“局内”页选）：
+    · 单设备：面板直接盖在这台手机自己的画面上。底部面板盖住原生的底部面板和时间轴，不显示等级、召唤师技能和大招
+      （原生的选手卡片上看得见）；原生的底部面板收起时，我们的跟着收起。
+    · 双设备：画布 1920×1080（16:9），面板不遮挡画面：顶部一条 90 高、底部一条 210 高，中间 1920×780 留空，
+      OBS 里把观战机（MuMu 模拟器）的纯净画面放在这里。模拟器分辨率设成同样的 32:13，比如 2560×1040 或 1920×780。
+      面板显示全部内容。
+  单设备时顶部面板不遮挡左上角的小地图。右上角是赛事标识（盖住原生的观战按钮）；双设备时左上角赛事标识、右上角比赛轮次，
+  都在顶部那条底色里。野怪 / 龙魂播报在右上角那一块里显示几秒再淡出。
+  导播点“结束本局”后，整个画布换成胜利画面；识别读到结算页的数据后换成赛后面板（postgame.js）。
+
+  OBS 浏览器源：单设备宽 2800、高 1264；双设备宽 1920、高 1080（或 2560×1440）。设成同比例的别的尺寸也可以，页面会等比缩放。
+  地址后面加 ?bg=1 会铺一层灰底，只用于没有游戏画面时看效果。
+-->
+<div class="stage" id="stage" data-width="2800" data-height="1264">
+    <div class="fake-game" id="fake-game" hidden></div>
+    <!-- 双设备时上下两条底色（面板本身居中，两侧用它补满）；单设备时不显示 -->
+    <div class="band band-top"></div>
+    <div class="band band-bottom"></div>
+
+    <section class="topbar" id="topbar">
+        <div class="tb-main">
+            <div class="tb-team blue">
+                <i class="tb-edge"></i>
+                <span class="logo"><img alt=""></span>
+                <div class="tb-id"><b class="tb-name"></b><span class="tb-pips"></span></div>
+                <span class="tb-stat"><i class="icon tower"></i><b class="num tb-towers"></b></span>
+                <div class="tb-gold"><span class="tb-gold-value"><i class="icon coin"></i><b class="num"></b></span><span class="tb-lead num"></span></div>
+            </div>
+            <div class="tb-center">
+                <b class="tb-kills blue num"></b>
+                <span class="tb-mark"><b id="mark-game"></b><i id="mark-format"></i></span>
+                <b class="tb-kills red num"></b>
+            </div>
+            <div class="tb-team red">
+                <i class="tb-edge"></i>
+                <span class="logo"><img alt=""></span>
+                <div class="tb-id"><b class="tb-name"></b><span class="tb-pips"></span></div>
+                <span class="tb-stat"><i class="icon tower"></i><b class="num tb-towers"></b></span>
+                <div class="tb-gold"><span class="tb-gold-value"><i class="icon coin"></i><b class="num"></b></span><span class="tb-lead num"></span></div>
+            </div>
+        </div>
+        <div class="tb-sub">
+            <div class="tb-dragons blue"></div>
+            <div class="tb-clock num" id="clock">00:00</div>
+            <div class="tb-dragons red"></div>
+        </div>
+    </section>
+
+    <!-- 两个上角：赛事标识、比赛轮次；野怪 / 龙魂播报在右上角那一块里替换显示几秒（corners.js） -->
+    <section class="corner left is-empty" id="corner-left"><div class="corner-face"></div></section>
+    <section class="corner right is-empty" id="corner-right"><div class="corner-face"></div></section>
+
+    <!-- 男爵 / 远古龙 buff 的剩余时间，各在自己队伍那一侧 -->
+    <section class="timers is-off" id="timers">
+        <div class="buffs blue" id="buffs-blue"></div>
+        <div class="buffs red" id="buffs-red"></div>
+    </section>
+
+    <section class="matchups" id="matchups" hidden></section>
+
+    <!-- 经济曲线：导播插入时顶替底部的对位面板，收起后面板回来 -->
+    <section class="chart" id="chart" aria-hidden="true"></section>
+
+    <!-- 特效层：连杀、出装提示、野怪 / 龙魂播报，都在这里临时生成、播完就删 -->
+    <section class="fx" id="fx"></section>
+
+    <!-- 赛后：胜利画面 → 读到结算数据后换成赛后面板。按 1920×1080 排版，缩放后居中 -->
+    <section class="postgame" id="postgame" data-view="none" aria-hidden="true">
+        <div class="pg-canvas">
+            <div class="pg-victory">
+                <div class="pv-glow"></div>
+                <div class="pv-stripes"></div>
+                <div class="pv-body">
+                    <span class="logo pv-logo"><img alt=""></span>
+                    <div class="pv-word">VICTORY</div>
+                    <div class="pv-team"><b class="pv-short"></b><span class="pv-name"></span></div>
+                    <div class="pv-cn"></div>
+                    <div class="pv-score"></div>
+                    <div class="pv-meta"></div>
+                </div>
+            </div>
+            <div class="pg-panel">
+                <header class="pp-head">
+                    <div class="pp-team blue">
+                        <div class="pp-id"><b class="pp-short"></b><i class="pp-result"></i></div>
+                        <span class="logo"><img alt=""></span>
+                        <b class="pp-score num"></b>
+                    </div>
+                    <div class="pp-team red">
+                        <div class="pp-id"><b class="pp-short"></b><i class="pp-result"></i></div>
+                        <span class="logo"><img alt=""></span>
+                        <b class="pp-score num"></b>
+                    </div>
+                    <div class="pp-center"><b class="pp-time num"></b><span>GAME TIME</span><i class="pp-format"></i></div>
+                </header>
+                <div class="pp-body">
+                    <section class="pp-left">
+                        <div class="pp-table"></div>
+                        <div class="pp-chart">
+                            <div class="pp-chart-title"><b>GOLD DIFFERENCE OVER TIME</b><span>经济曲线</span></div>
+                            <div class="pp-chart-box"></div>
+                        </div>
+                    </section>
+                    <section class="pp-right">
+                        <div class="pp-metric"><b></b><span></span></div>
+                        <div class="pp-players"></div>
+                        <div class="pp-bans">
+                            <div class="blue"><b>BANS</b><div class="pp-ban-icons"></div></div>
+                            <div class="red"><b>BANS</b><div class="pp-ban-icons"></div></div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+<script src="/common/client.js"></script>
+<script src="/common/champions.js"></script>
+<script src="/overlay/overlay.js"></script>
+<script src="/overlay/icons.js"></script>
+<script src="/overlay/game.js"></script>
+<script src="/overlay/corners.js"></script>
+<script src="/overlay/effects.js"></script>
+<script src="/overlay/postgame.js"></script>
+</body>
+</html>

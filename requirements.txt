@@ -1,0 +1,7 @@
+# Python 依赖。用 conda 的话直接 `conda env create -f environment.yml`，它会装这里的全部。
+aiohttp>=3.9
+PyYAML>=6.0
+pytest>=8.0
+numpy>=2.0
+opencv-python>=4.10        # 只给 tools/ 里读写图片用；vision/ 本身只用 numpy
+av>=14.0                   # 解码手机推过来的 H.264 视频流

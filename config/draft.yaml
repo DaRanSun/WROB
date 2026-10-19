@@ -1,0 +1,36 @@
+# BP 流程。
+#
+# order 里每个记号是一手：B = 蓝方，R = 红方。
+# 连写表示同一手里同时进行、共用一个倒计时，例如 "B RR BB R" 表示红方两人一起选。
+# 每方的禁用位、选用位数量由 order 里出现的次数决定（选用必须是 5 个）。
+#
+# [待验证] 国服自定义房间的赛事征召：每一手的秒数、连续两选是否同时进行、
+# 选完后的交换阶段有多久。拿到 BP 录像后按实际改这里即可，不用动代码。
+
+default: tournament
+
+formats:
+  tournament:
+    name: 赛事征召
+    phases:
+      - { key: ban1,  name: 第一轮禁用, type: ban,  order: "B R B R B R", seconds: 30 }
+      - { key: pick1, name: 第一轮选用, type: pick, order: "B R R B B R", seconds: 30 }
+      - { key: ban2,  name: 第二轮禁用, type: ban,  order: "R B R B",     seconds: 30 }
+      - { key: pick2, name: 第二轮选用, type: pick, order: "R B B R",     seconds: 30 }
+    lineup_seconds: 30      # 全部选完后的交换 / 调整阶段
+
+  # 自选：不禁用、不读秒、不受无畏征召限制，OB 排位、巅峰对决这类不走赛事征召的对局用。
+  # 按选人顺序填英雄（order 不写就是排位的 B R R B B R R B B R），填完再按游戏里的实际分路调整、确认。
+  free:
+    name: 自选（不禁用，按顺序选，选完调分路）
+    free: true
+
+  # 连续两选同时进行的写法，备用。
+  tournament-pairs:
+    name: 赛事征召（双选同时）
+    phases:
+      - { key: ban1,  name: 第一轮禁用, type: ban,  order: "B R B R B R", seconds: 30 }
+      - { key: pick1, name: 第一轮选用, type: pick, order: "B RR BB R",   seconds: 30 }
+      - { key: ban2,  name: 第二轮禁用, type: ban,  order: "R B R B",     seconds: 30 }
+      - { key: pick2, name: 第二轮选用, type: pick, order: "R BB R",      seconds: 30 }
+    lineup_seconds: 30
