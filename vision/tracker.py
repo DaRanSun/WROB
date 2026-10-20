@@ -295,6 +295,7 @@ class Tracker:
             out[f"{player}.cooldowns"] = dict(self.cooldowns[player])
 
     def _extras(self, reading: dict, out: dict) -> None:
+        weak = set(reading.get("weak") or ())
         for path, value in reading["values"].items():
             if path.endswith(".level"):
                 slot = self._slot(path)
@@ -305,6 +306,9 @@ class Tracker:
                 # 读到 4 / 14 而“1 / 11”正好是现在的等级或下一级时，按 1 / 11 算
                 if slot.known and value % 10 == 4 and value - 3 in (slot.value, slot.value + 1):
                     value -= 3
+                # 备用读法（浅色头像上）读出的数只许往上走：它偶尔会把“8”读成“3”（左半边笔画被当成背景减掉了）
+                if path in weak and slot.known and value < slot.value:
+                    continue
                 # 平时一次涨一两级，连续 1 秒读成同一个数就认；跳得多的要 3 秒；
                 # 变小只可能是开局调对位时两行换了人，要稳稳读 5 秒才认
                 step = value - slot.value if slot.known else 1

@@ -5,7 +5,8 @@
     python tools/fetch_ults.py --all      # 全部重新下载
 
 图标来自 Riot 的 Data Dragon（端游的公开素材库）：手游和端游的大招图标绝大多数是同一张。
-端游里没有的英雄（比如诺拉）下载不到，面板上会用一个通用的“R”图标；自己找到图后按同样的文件名放进去即可。
+端游里没有的英雄下载不到，面板上会用一个通用的“R”图标；自己找到图后按同样的文件名放进去即可（--all 也不会覆盖它们）。
+诺拉的 assets/ults/norra.png 就是这样来的：用户 10-20 给的手游截图 norra_R.png，缩成 64×64。
 """
 import argparse
 import json

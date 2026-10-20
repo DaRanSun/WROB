@@ -8,6 +8,7 @@
                    "blue.0.items": ["铁板靴", None, "?", …],            6 格，由外到内，第 0 格是鞋子
                    "blue.0.respawn": 26, …},                             读不出的项不出现
         "scores": {"blue.kills": 0.93, …},                                每一项里最差那个字的匹配分
+        "weak": ["red.4.level", …],                                       用备用读法读出的等级（tracker 不让它们往下改）
         "dragons": {"blue": ["ocean"], "red": []},                        原生顶部条上双方拿到的元素龙；看不清的一方不出现
         "chips": {"upper": ("baron", True), "lower": None},               两块野怪刷新牌子：(图标, 是否写着“存活”)，没有牌子为 None
         "timeline": {"blue": 0, "red": 310},                              实时 OB 时间轴最右端双方的图标像素数；读不到为 None
@@ -67,10 +68,34 @@ def parse_digit(text: str):
 LEVEL_UNITS_FROM = 14       # 等级那一小块里，个位数字在这一列往右（数字是靠右对齐的）
 
 
+LEVEL_TOPHAT = 5            # 备用读法的窗口：比数字的笔画（3–4 像素）宽，比头像上的大块亮区窄
+LEVEL_TOPHAT_INK = (25, 60)  # 比周围亮出这么多开始算字，亮出后一个数算满墨
+
+
 def level_ink(roi: np.ndarray) -> np.ndarray:
     """等级数字的墨迹。数字压在头像上，旁边常有头像自己的亮斑：把孤零零的一列（“1”的小尖角断开的那一点、
     头像上的噪点）擦掉，免得解码时因为“有墨迹没认出来”而放弃。"""
-    ink = INKS["grey"](roi).copy()
+    return _drop_lonely(INKS["grey"](roi).copy())
+
+
+def _grey_filter(image: np.ndarray, size: int, reduce) -> np.ndarray:
+    pad = size // 2
+    windows = np.lib.stride_tricks.sliding_window_view(np.pad(image, pad, mode="edge"), (size, size))
+    return reduce(windows, axis=(2, 3))
+
+
+def level_tophat_ink(roi: np.ndarray) -> np.ndarray:
+    """备用读法：头像在数字那一角是浅色的（萨勒芬妮、剑姬、娑娜的粉白色），整块都和数字一样亮，level_ink 分不开。
+    数字的笔画细、外面还有一圈暗描边，所以用“顶帽”：亮度减去它的开运算（先取窗口最小再取最大），大块的亮区被减掉，
+    只留下比窗口细的亮笔画。代价是数字紧挨着一大块亮区时，挨着的那半边笔画也会被减掉（“8”剩下右半边像“3”），
+    所以它读出的数只许让等级往上走（tracker 里看 reading["weak"]）。"""
+    value = roi.min(axis=2).astype(np.float32)
+    opened = _grey_filter(_grey_filter(value, LEVEL_TOPHAT, np.min), LEVEL_TOPHAT, np.max)
+    low, high = LEVEL_TOPHAT_INK
+    return _drop_lonely(np.clip((value - opened - low) / (high - low), 0, 1))
+
+
+def _drop_lonely(ink: np.ndarray) -> np.ndarray:
     on = (ink > 0.3).sum(axis=0) >= 2
     padded = np.concatenate(([False], on, [False]))
     lonely = on & ~padded[:-2] & ~padded[2:]
@@ -118,7 +143,8 @@ class Reader:
         self.spells, self.runes = ItemMatcher("spells"), ItemMatcher("runes")
         self.chips = objectives.Chips(self.layout)
         self.announcer = Announcer(self.layout)
-        self._cache: dict[str, tuple[np.ndarray, tuple | None]] = {}
+        self._cache: dict[str, tuple] = {}
+        self.weak: set[str] = set()             # 这一帧里用备用读法读出的等级
 
     def _decode(self, name: str, roi: np.ndarray, ink: str, glyphs: str, parse):
         """读一项。画面没变就沿用上次的结果：大多数格子在大多数时刻都没变。读不出的不记，下次重读。"""
@@ -146,25 +172,36 @@ class Reader:
         minutes, seconds = int(found[0][:2]), int(found[0][3:])
         return minutes * 60 + seconds if seconds < 60 else None
 
-    def read_level(self, name: str, roi: np.ndarray) -> tuple[int, float] | None:
-        """头像右下角的等级。整块读不出来时（十位那边被头像的亮斑糊住了）只读个位，交给 tracker 结合之前的等级补上十位。"""
-        cached = self._cache.get(name)
-        if cached is not None:
-            delta = np.abs(roi.astype(np.int16) - cached[0]).max(axis=2)
-            if np.count_nonzero(delta > PIXEL_DELTA) < PIXEL_COUNT:
-                return cached[1]
+    def _level_from(self, ink: np.ndarray) -> tuple[int, float] | None:
+        """整块读；读不出来时（十位那边被头像的亮斑糊住了）只读个位，交给 tracker 结合之前的等级补上十位。"""
         glyphs = self.sets[self.layout["levels"]["glyphs"]]
-        ink = level_ink(roi)
         decoded = glyphs.decode(ink)
         value = parse_level(decoded[0]) if decoded else None
         if value is None:
             decoded = glyphs.decode(ink[:, LEVEL_UNITS_FROM:])
             value = parse_digit(decoded[0]) if decoded else None
-        if value is None:
+        return None if value is None else (value, decoded[1])
+
+    def read_level(self, name: str, roi: np.ndarray) -> tuple[int, float] | None:
+        """头像右下角的等级。先按亮度读；读不出来再用备用读法（level_tophat_ink），那样读出的记进 self.weak。"""
+        cached = self._cache.get(name)
+        if cached is not None:
+            delta = np.abs(roi.astype(np.int16) - cached[0]).max(axis=2)
+            if np.count_nonzero(delta > PIXEL_DELTA) < PIXEL_COUNT:
+                if cached[2]:
+                    self.weak.add(name)
+                return cached[1]
+        result, weak = self._level_from(level_ink(roi)), False
+        if result is None:
+            result = self._level_from(level_tophat_ink(roi))
+            weak = result is not None
+        if result is None:
             self._cache.pop(name, None)
             return None
-        self._cache[name] = (roi.astype(np.int16), (value, decoded[1]))
-        return self._cache[name][1]
+        if weak:
+            self.weak.add(name)
+        self._cache[name] = (roi.astype(np.int16), result, weak)
+        return result
 
     def read_respawn(self, roi: np.ndarray) -> int | None:
         """一张选手卡片的复活倒计时。头像有颜色 = 活着（0）；灰的就读上面的红色数字，读不出返回 None。"""
@@ -179,6 +216,7 @@ class Reader:
     def read(self, frame: np.ndarray) -> dict:
         frame = layout_mod.to_reference(frame, self.layout)
         values, scores, lights = {}, {}, {}
+        self.weak = set()
 
         def put(name, result):
             if result is not None:
@@ -211,6 +249,8 @@ class Reader:
                     values[name] = seconds
             for name, roi in layout_mod.level_fields(frame, self.layout).items():
                 put(name, self.read_level(name, roi))
+            if self.weak:
+                result["weak"] = sorted(self.weak)
             for name, roi in layout_mod.ult_fields(frame, self.layout).items():
                 values[name] = ult_progress(roi)
             cells = layout_mod.spell_cells(frame, self.layout)

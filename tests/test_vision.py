@@ -242,6 +242,40 @@ def test_reads_levels(reader):
     assert levels("hud-306") == [[13, 2, 12, 11, 1], [None, 11, 12, 10, None]]     # 实际：13 12 12 11 11 / 阵亡 11 12 10 阵亡
 
 
+def test_reads_levels_on_light_portraits(reader):
+    """10-19 直播：萨勒芬妮、剑姬、娑娜的头像在等级那一角是浅粉白色，和数字一样亮，按亮度整块都是“字”，读不出来，
+    面板上的等级卡在了 9 级 / 1 级。备用读法（顶帽）读得出，但标成 weak。夹具是那段录像里的五小块，人眼核对过。"""
+    with np.load(FIXTURES / "levels-bright.npz") as data:
+        crops = {key: data[key] for key in data.files}
+
+    def read(key):
+        reader._cache.clear()
+        reader.weak = set()
+        result = reader.read_level("red.4.level", crops[key])
+        return result and result[0], bool(reader.weak)
+    assert read("seraphine9") == (9, True)
+    assert read("fiora6") == (6, True)
+    assert read("sona9") == (9, True)
+    assert read("fiora11") == (4, True)         # 实际 11：只读出个位，“1”还读成了“4”，tracker 按已有等级纠正
+    assert read("seraphine3") == (3, True)      # 实际 8：左半边笔画挨着一大块亮区，被当成背景减掉了
+
+
+def test_weak_level_reads_only_go_up():
+    """备用读法读出的等级只许往上走：“8”被读成“3”不会让面板掉级；往上的照常认，十几级的个位也照常补。"""
+    tracker = Tracker()
+
+    def feed(value, weak, times=6):
+        out = {}
+        for _ in range(times):
+            tracker._extras({"values": {"red.4.level": value}, "weak": ["red.4.level"] if weak else []}, out)
+        return out.get("red.4.level")
+    assert feed(8, False) == 8
+    assert feed(3, True, times=40) is None      # 读多少次都不掉级
+    assert feed(9, True) == 9
+    assert feed(0, True) == 10                  # 只读出个位
+    assert feed(4, True) == 11                  # 11 的“1”读成“4”
+
+
 def test_ult_progress():
     """大招圆点：没学 / 刚用掉是暗的，冷却中是一块绿色扇形，转好了整块绿。"""
     size = 19
