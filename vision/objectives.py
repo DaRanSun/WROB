@@ -28,6 +28,11 @@ RING_MAX = 0.12
 AGREE = 0.7             # 亮像素里至少这么多和整体是同一种颜色
 TEXT_MIN = 0.02         # 牌子上有字时，文字区域的平均墨迹至少这么多
 ALIVE_SCORE = 0.6       # 文字和“存活”模板的相关系数：实测“存活”0.82–0.99，倒计时不超过 0.16
+# buff 计时牌子（10-20 直播：打掉远古龙后，原生界面把两块刷新牌子都收起来，只剩一块“图标 + 02:00”的牌子，
+# 右边是拿到 buff 那一方的颜色——蓝底 (143, 99, 50)）。图标还是那个野怪的：男爵几乎没有绿（G≈0），远古龙 G≈130。
+BUFF_TINT = 50          # 右边的底色，蓝减红（或红减蓝）至少这么多
+BUFF_BRIGHT = 100       # 而且那个颜色分量至少这么亮
+BUFF_ICON_GREEN = 60    # 图标亮像素的绿色中位数低于这个是男爵，否则是远古龙
 
 
 def colours(pixels: np.ndarray) -> np.ndarray:
@@ -109,8 +114,30 @@ class Chips:
         score = float((ink * self.alive).sum() / (np.linalg.norm(ink) + 1e-6))
         return kind, score >= ALIVE_SCORE
 
-    def read(self, frame: np.ndarray) -> dict[str, tuple[str, bool] | None]:
-        return {name: self.read_one(frame, top) for name, top in self.spec["top"].items()}
+    def read_buff(self, frame: np.ndarray, top: int) -> tuple[str, str] | None:
+        """这个位置是不是 buff 计时牌子：(野怪, 哪一方)，比如 ("elder", "blue")。"""
+        icon, text = self.crops(frame, top)
+        b, g, r = text.reshape(-1, 3).astype(np.float32).mean(axis=0)
+        side = "blue" if b - r >= BUFF_TINT and b >= BUFF_BRIGHT else "red" if r - b >= BUFF_TINT and r >= BUFF_BRIGHT else None
+        if side is None or ink_grey(text).mean() < TEXT_MIN:        # 底色对了，上面还得有倒计时的字
+            return None
+        lit = icon.max(axis=2) >= LIT
+        if not ICON_MIN <= lit.mean() <= ICON_MAX + 0.1:
+            return None
+        pixels = icon[lit].astype(np.int16)
+        if np.median(pixels[:, 0]) < 140:                           # 两种图标都是偏蓝紫的亮色
+            return None
+        return ("baron" if np.median(pixels[:, 1]) < BUFF_ICON_GREEN else "elder"), side
+
+    def read(self, frame: np.ndarray) -> dict:
+        """{"upper": (图标, 是否“存活”) | None, "lower": …}；有 buff 计时牌子时另有 "buff": (野怪, 哪一方)，它所在的位置记 None。"""
+        out = {}
+        for name, top in self.spec["top"].items():
+            buff = self.read_buff(frame, top)
+            if buff:
+                out["buff"] = buff
+            out[name] = None if buff else self.read_one(frame, top)
+        return out
 
 
 # ---- 事件时间轴 ----

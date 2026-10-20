@@ -17,13 +17,25 @@ formats:
       - { key: pick1, name: 第一轮选用, type: pick, order: "B R R B B R", seconds: 30 }
       - { key: ban2,  name: 第二轮禁用, type: ban,  order: "R B R B",     seconds: 30 }
       - { key: pick2, name: 第二轮选用, type: pick, order: "R B B R",     seconds: 30 }
-    lineup_seconds: 30      # 全部选完后的交换 / 调整阶段
+    lineup_seconds: 0       # 全部选完后的交换 / 调整阶段：不读秒，导播手动确认（局内还可能换线，分路由导播定）
 
-  # 自选：不禁用、不读秒、不受无畏征召限制，OB 排位、巅峰对决这类不走赛事征召的对局用。
+  # 自选：不禁用，OB 排位、巅峰对决这类不走赛事征召的对局用。按 B RR BB RR BB R 选，
+  # 每一轮读 25 秒（pick_seconds 可改；连选的两手共用，和 3 Ban 一样）。无畏征召按赛事设置（不要就选“不启用”）。
   # 按选人顺序填英雄（order 不写就是排位的 B R R B B R R B B R），填完再按游戏里的实际分路调整、确认。
   free:
     name: 自选（不禁用，按顺序选，选完调分路）
     free: true
+
+  # 3 Ban：双方同时各暗禁 3 个（互相看不见，可以禁同一个，共用 30 秒），然后按自选的规则选人
+  # （B RR BB RR BB R，每轮 25 秒、连选的两手共用；选完导播调分路）。秒数是 10-20 录屏里游戏的读秒，
+  # 识别在跑时导播台的倒计时会对到游戏上。无畏征召按赛事设置。
+  # 赛事征召（上面的 tournament，游戏里的 5 Ban）禁用、选人都是一手 30 秒。
+  blind3:
+    name: 3 Ban（双方同时暗禁 3 个，再按顺序选）
+    free: true
+    bans: 3
+    ban_seconds: 30
+    pick_seconds: 25
 
   # 连续两选同时进行的写法，备用。
   tournament-pairs:
@@ -33,4 +45,4 @@ formats:
       - { key: pick1, name: 第一轮选用, type: pick, order: "B RR BB R",   seconds: 30 }
       - { key: ban2,  name: 第二轮禁用, type: ban,  order: "R B R B",     seconds: 30 }
       - { key: pick2, name: 第二轮选用, type: pick, order: "R BB R",      seconds: 30 }
-    lineup_seconds: 30
+    lineup_seconds: 0

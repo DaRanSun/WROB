@@ -12,7 +12,10 @@
   · 装备：每一格连续两次认成同一件才换；认不准（冷却时被压暗）就保持原样；“变成空格子”要持续约 2 秒才认。
   · 复活倒计时：数字连续两次一致才认；倒计时还剩不少却突然“活了”，多半是头像被特效盖住，要持续 1 秒才认。
   · 元素龙：原生顶部条上某一方多出一个图标，持续 1 秒就报一次击杀（带阵营和属性）。
-  · 先锋、男爵、远古龙：刷新牌子上的“存活”不见了并持续约 1.6 秒，报一次击杀。是哪一方打的看时间轴：
+  · 先锋、男爵、远古龙：刷新牌子上的“存活”不见了并持续约 1.6 秒，报一次击杀。打掉男爵 / 远古龙后，原生界面会把
+    刷新牌子整列收起，只显示一块 buff 计时牌子（图标是那个野怪、底色是拿到的一方）：这时只有和 buff 对得上的那个坑
+    算击杀，阵营就是底色；另一个坑的“存活”只是被收起来了，不算（10-20 直播打远古龙时男爵被误报过）。
+    没有 buff 牌子时，是哪一方打的看时间轴：
     实时 OB 里新事件的图标出现在时间轴最右端，哪一行（红上蓝下）突然多出一个图标就是哪一方；
     两行都多了或者都没多（回放、面板收起）就不猜，留给导播点。
   · 多杀：以游戏自己的播报为准（“红方三连破”），同一条播报连续两次读成一样才报，一条播报只报一次。
@@ -53,6 +56,7 @@ REVIVE_NATURAL = 2              # 倒计时剩这么几秒以内再读成“活�
 DRAGON_CONFIRM = 5              # 顶部条上的元素龙图标变多了，要连续这么多次才认
 CHIP_CONFIRM = 3                # 刷新牌子的状态变了，要连续这么多次才认
 CHIP_GONE_CONFIRM = 8           # 写着“存活”的牌子不见了（= 被打掉了），要连续这么多次才认
+BUFF_RECENT = 5.0               # buff 计时牌子在这么多秒内见过，就拿它来判断是哪个野怪、哪一方
 DRAGON_ICON_LAG = 1.0           # 顶部条的图标比击杀晚出现约 1 秒（录像里两次都是），记击杀时刻时减掉
 SPAWN_SLACK = 5                 # 判断“这时候坑里是哪种野怪”时，在刷新时间前后留几秒余量
 MARK_GAIN = 120                 # 时间轴最右端某一行多出这么多图标像素，算多了一个图标（男爵的图标约 300–430）
@@ -133,6 +137,7 @@ class Tracker:
         self.dragon_first: dict[str, tuple[tuple, float]] = {}      # 还没确认的新读数第一次出现的游戏时间
         self.pits: dict[str, Slot] = {}             # "upper" / "lower" → 牌子去抖后的状态
         self.pit_lost: dict[str, tuple[float, float]] = {}      # “存活”的牌子第一次读不到时的 (游戏时间, 时间戳)
+        self.buff_seen: tuple[str, str, float] | None = None    # 最近看到的 buff 计时牌子：(野怪, 哪一方, 时间戳)
         self.marks: deque[tuple[float, dict]] = deque()         # 最近几秒时间轴最右端的读数：(时间戳, {"blue": n, "red": n})
         self.timing = load_config("cooldowns")
         self.lamps: dict[str, Lamp] = {}                         # "blue.0.spell.1"、"red.3.item.4" → 亮暗
@@ -452,7 +457,11 @@ class Tracker:
     def _pits(self, chips: dict, t: float, now: float) -> list[dict]:
         """两块刷新牌子。“存活”的牌子消失了 = 这个坑里的野怪被打掉了。"""
         commands = []
-        for name, state in chips.items():
+        if chips.get("buff"):
+            self.buff_seen = (*chips["buff"], now)
+        buff = self.buff_seen if self.buff_seen and now - self.buff_seen[2] <= BUFF_RECENT else None
+        for name in ("upper", "lower"):
+            state = chips.get(name)
             slot = self.pits.setdefault(name, Slot())
             was = slot.value if slot.known else None
             was_alive = bool(was and was[1])
@@ -470,6 +479,11 @@ class Tracker:
                 continue                    # 元素龙归顶部条的图标管（那里有阵营和属性）；到时间自己消失的也不算击杀
             else:
                 what = "elder"
+            if buff and buff[0] in ("baron", "elder"):
+                if buff[0] != what:
+                    continue                # 原生界面在放另一个野怪的 buff，把这块牌子收起来了：不是击杀
+                commands.append(self._kill(what, at, buff[1]))      # 阵营看 buff 牌子的底色
+                continue
             commands.append(self._kill(what, at, self._who(lost_at, now)))
         return commands
 

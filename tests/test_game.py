@@ -412,9 +412,9 @@ def test_level_and_ult(live):
 
 
 def test_display_settings(store):
-    assert store.ui == {"mode": "single", "buffs": True, "matchups": True, "chart": False, "effects": True}
+    assert store.ui == {"mode": "single", "buffs": True, "matchups": True, "chart": False, "effects": True, "autoBp": True}
     store.apply({"type": "ui.set", "values": {"mode": "dual", "buffs": 0, "chart": True}}, 0)
-    assert store.snapshot(0)["ui"] == {"mode": "dual", "buffs": False, "matchups": True, "chart": True, "effects": True}
+    assert store.snapshot(0)["ui"] == {"mode": "dual", "buffs": False, "matchups": True, "chart": True, "effects": True, "autoBp": True}
     with pytest.raises(CommandError, match="single"):
         store.apply({"type": "ui.set", "values": {"mode": "triple"}}, 0)
     with pytest.raises(CommandError, match="没有这个显示设置"):

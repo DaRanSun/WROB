@@ -207,6 +207,29 @@ def test_herald_chip(reader):
     assert reader.chips.read(live_frame(chips=(90, 680))) == {"upper": ("herald", True), "lower": ("infernal", True)}
 
 
+def chips_frame(key: str) -> np.ndarray:
+    canvas = np.zeros((1264, 2800, 3), np.uint8)
+    with np.load(FIXTURES / "chips-elder.npz") as data:
+        canvas[90:270, 680:880] = data[key]
+    return canvas
+
+
+def test_buff_timer_chip(reader):
+    """10-20 直播 20:51：蓝方打掉远古龙，原生界面把两块刷新牌子（男爵存活、远古龙存活）都收起来，
+    只剩一块蓝底的远古龙 buff 计时（02:00）。"""
+    assert reader.chips.read(chips_frame("before")) == {"upper": ("baron", True), "lower": ("other", True)}
+    assert reader.chips.read(chips_frame("after")) == {"upper": None, "lower": None, "buff": ("elder", "blue")}
+
+
+def test_elder_buff_does_not_kill_baron():
+    """男爵的“存活”牌子是被 buff 计时挤掉的，不是被打掉：只记远古龙，阵营看 buff 牌子的底色。"""
+    tracker = Tracker()
+    alive = {"upper": ("baron", True), "lower": ("other", True)}
+    after = {"upper": None, "lower": None, "buff": ("elder", "blue")}
+    out = kills(tracker, [({}, alive)] * 6 + [({}, after)] * 15, clock=20 * 60 + 45)
+    assert [(c["what"], c.get("side")) for c in out] == [("elder", "blue")]
+
+
 def test_timeline_head_shows_who_took_it(reader):
     """实时 OB：蓝方打掉男爵后，时间轴最右端蓝方那一行多出一个图标；红方那一行没有变化。"""
     before = objectives.read_timeline(live_frame(timeline_before=(860, 1780)), reader.layout)

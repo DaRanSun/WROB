@@ -41,8 +41,12 @@
     function blockedReason(slug, ref) {
         const draft = state.draft;
         const slot = slotOf(ref);
-        if (draft.used[slug] && !(slot.locked && slot.champion === slug)) return draft.used[slug];
-        if (draft.free) return null;            // 自选模式不受无畏征召限制
+        if (draft.blindBans && ref.type === 'ban') {        // 暗禁：两边可以禁同一个，只有本方禁过的不行
+            const own = draft.slots[ref.side].ban.some((other, index) => index !== ref.index && other.locked && other.champion === slug);
+            if (own) return '本方已禁用';
+        } else if (draft.used[slug] && !(slot.locked && slot.champion === slug)) {
+            return draft.used[slug];
+        }
         if (ref.type === 'pick' || draft.fearless.bans) return draft.fearless.sides[ref.side][slug] || null;
         return null;
     }
@@ -308,7 +312,9 @@
             column.replaceChildren();
             ['ban', 'pick'].forEach(kind => {
                 if (!draft.slots[side][kind].length) return;            // 自选模式没有禁用位
-                column.append(h('div', { class: 'side-label' }, KIND_NAMES[kind] + (draft.free ? '（自选，不禁用）' : '')));
+                const note = kind === 'ban' && draft.blindBans ? '（双方同时暗禁，可以重复）'
+                    : draft.free && !draft.slots[side].ban.length ? '（自选，不禁用）' : draft.free ? '（按顺序选）' : '';
+                column.append(h('div', { class: 'side-label' }, KIND_NAMES[kind] + note));
                 draft.slots[side][kind].forEach((_, index) => {
                     const ref = { side, type: kind, index };
                     const input = h('input', {
@@ -434,7 +440,12 @@
         nodes.confirm = button('确认阵容', () => send({ type: 'draft.confirm' }), 'primary', '面板按上野中下辅重排并显示选手');
         nodes.enter = button('进入局内 →', () =>
             send({ type: 'game.new' }).then(reply => reply.ok && Director.showTab('game')), 'primary', '把阵容带进局内面板');
-        nodes.actions.replaceChildren(nodes.format, nodes.start, nodes.lock, nodes.skip, nodes.confirm, nodes.enter);
+        // 画面识别自动填 BP：数据机停在选人界面时，禁用、亮出、选定都由识别填；导播锁过的格子识别不动
+        nodes.autoBp = h('input', { type: 'checkbox', onchange: event => send({ type: 'ui.set', values: { autoBp: event.target.checked } }) });
+        nodes.autoLabel = h('label', { class: 'check', title: '数据机停在游戏的选人界面时，识别自动填禁用、亮出（预选）和选定。导播自己锁过的格子识别不会改；识别填错了直接改就行' },
+            nodes.autoBp, ' 识别自动填 BP');
+        nodes.visionBp = h('span', { class: 'dim vision-bp' });
+        nodes.actions.replaceChildren(nodes.format, nodes.start, nodes.lock, nodes.skip, nodes.confirm, nodes.enter, nodes.autoLabel, nodes.visionBp);
         nodes.actions.addEventListener('mousedown', event => {      // 点这些按钮时别让槽位输入框失焦
             if (event.target.closest('button')) event.preventDefault();
         });
@@ -445,12 +456,14 @@
         const turn = draft.status === 'running' ? draft.turns[draft.turn] : null;
         const ref = targetRef();
         const slot = ref ? slotOf(ref) : null;
-        nodes.phase.textContent = draft.free && FREE_TEXT[draft.status] ? FREE_TEXT[draft.status]
+        nodes.phase.textContent = draft.free && FREE_TEXT[draft.status]
+            ? (draft.status === 'idle' && draft.blindBans ? '暗禁：先填双方的禁用（哪边先都行），再按选人顺序填英雄' : FREE_TEXT[draft.status])
+            : turn && turn.both ? turn.phaseName + ' · 双方同时' + KIND_NAMES[turn.type] + '（暗禁，可以重复）'
             : turn ? turn.phaseName + ' · ' + WROB.sideNames[turn.side] + KIND_NAMES[turn.type]
             : STATUS_TEXT[draft.status];
-        nodes.phase.dataset.side = turn ? turn.side : '';
+        nodes.phase.dataset.side = turn && !turn.both ? turn.side : '';
         const manual = P && !draft.active.some(item => sameRef(item, P.ref));
-        nodes.target.textContent = !ref ? (draft.status !== 'idle' ? '' : draft.free ? '直接填第一个选用位就开始' : '点“开始 BP”开始读秒，或者直接填第一个槽位')
+        nodes.target.textContent = !ref ? (draft.status !== 'idle' ? '' : draft.free ? '直接填第一格就开始' : '点“开始 BP”开始读秒，或者直接填第一个槽位')
             : (manual ? '正在改：' : '轮到：') + slotLabel(ref) + (isHover(slot) ? '（预选 ' + WROB.champions.name(slot.champion) + '，回车锁定）' : '');
         nodes.target.classList.toggle('is-manual', Boolean(manual));
         nodes.hint.textContent = ref ? '点英雄填入 ' + slotLabel(ref)
@@ -458,17 +471,20 @@
 
         nodes.format.hidden = draft.status !== 'idle' || nodes.format.options.length < 2;
         if (draft.status === 'idle' && document.activeElement !== nodes.format) nodes.format.value = draft.format;
-        nodes.start.hidden = draft.status !== 'idle' || Boolean(draft.free);       // 自选模式不读秒，直接填就行
+        nodes.start.hidden = draft.status !== 'idle';
         nodes.lock.hidden = !(slot && isHover(slot));
         nodes.skip.hidden = !(ref && ref.type === 'ban' && draft.status !== 'idle' && !slot.locked);
         nodes.confirm.hidden = draft.status !== 'lineup';
         nodes.enter.hidden = draft.status !== 'done';
 
-        const counting = !draft.free && (draft.status === 'running' || draft.status === 'lineup');
+        const counting = draft.timer.totalMs > 0 && (draft.status === 'running' || draft.status === 'lineup');
         nodes.timerToggle.textContent = draft.timer.running ? '暂停' : '继续';
         nodes.timerToggle.disabled = nodes.timerReset.disabled = !counting;
-        [nodes.timer, nodes.timerToggle, nodes.timerReset].forEach(node => { node.hidden = Boolean(draft.free); });     // 自选模式没有倒计时
         nodes.undo.disabled = !state.canUndo;
+        nodes.autoBp.checked = state.ui.autoBp !== false;
+        const vision = state.game.vision;
+        const reading = vision && vision.screen === 'bp' && WROB.now() - vision.at < 6000;
+        nodes.visionBp.textContent = reading ? (state.ui.autoBp !== false ? '识别正在读选人界面' : '识别看到了选人界面（自动填已关）') : '';
     }
 
     function paintResult() {
@@ -510,9 +526,9 @@
     function tickTimer() {
         if (state) {
             const timer = state.draft.timer;
-            const counting = !state.draft.free && (state.draft.status === 'running' || state.draft.status === 'lineup');
+            const counting = timer.totalMs > 0 && (state.draft.status === 'running' || state.draft.status === 'lineup');
             const remaining = timer.running ? Math.max(0, timer.endsAt - WROB.now()) : timer.remainingMs;
-            nodes.timer.textContent = counting ? String(Math.ceil(remaining / 1000)) : '–';
+            nodes.timer.textContent = counting ? String(Math.max(0, Math.ceil(remaining / 1000) - 1)) : '–';     // 和游戏一样 29 → 0
             nodes.timer.classList.toggle('is-low', counting && remaining <= 5000);
         }
         requestAnimationFrame(tickTimer);

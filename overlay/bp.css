@@ -383,4 +383,4 @@
 .backdrop-meta { margin-top: 26px; font-size: 24px; letter-spacing: 4px; color: var(--text-dim); }
 
 /* 自选模式：没有禁用位 */
-.band[data-free="1"] .bans { display: none; }
+.band[data-bans="0"] .bans { display: none; }

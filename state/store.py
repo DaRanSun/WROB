@@ -27,9 +27,11 @@ UNDO_DEPTH = 100
 #   matchups 底部的对位面板。
 #   chart    经济曲线：导播插入时顶替底部面板，收起后面板回来。
 #   effects  连杀、出装提示、野怪 / 龙魂播报这些自动特效（导播手动放的不受它管）。
-DEFAULT_UI = {"mode": "single", "buffs": True, "matchups": True, "chart": False, "effects": True}
+#   autoBp   画面识别自动填 BP（数据机停在选人界面时）。关掉后识别发来的 BP 一概不收，全部手填。
+DEFAULT_UI = {"mode": "single", "buffs": True, "matchups": True, "chart": False, "effects": True, "autoBp": True}
 UI_MODES = ("single", "dual")
-VISION_AFTER_END = ("postgame.stats",)      # 一局结束后识别发来的命令里，只收这些
+# 一局结束后识别发来的命令里，只收这些：结算页的数据，和下一局的 BP（下一局的选人界面出现时，上一局还挂着赛后画面）
+VISION_AFTER_END = ("postgame.stats", "draft.start", "draft.hover", "draft.lock", "draft.skip")
 VISION_ALIVE_MS = 6000      # 识别每 2 秒报一次到；超过这么久没消息就当它没在跑
 HEARTBEAT_LAG = 1.0         # 报到隔 2 秒一次，“时钟读不到了”平均晚报 1 秒
 
@@ -272,21 +274,49 @@ class Store:
 
     # BP
 
+    def _vision_bp(self, cmd, now) -> bool:
+        """识别（vision/bp.py）发来的 BP 命令要不要执行。导播关了自动 BP、槽位不存在、槽位已经锁定
+        （导播填过、或者识别自己填过）都不执行，也不报错——识别只填空着的或者只是预选的槽位，导播改过的不会被改回去。"""
+        if cmd.get("source") != "vision":
+            return True
+        if not self.ui.get("autoBp", True):
+            return False
+        ref = cmd.get("slot")
+        if ref is not None:
+            try:
+                if draft_mod.get_slot(self.draft, ref)["locked"]:
+                    return False
+            except CommandError:
+                return False
+        if self.draft["status"] == "idle":     # 导播还没点开始：识别看到了选人界面，就开始
+            draft_mod.start(self.draft, now)
+        return True
+
     def _draft_start(self, cmd, now):
+        if cmd.get("source") == "vision":
+            if self.ui.get("autoBp", True) and self.draft["status"] == "idle":
+                draft_mod.start(self.draft, now)
+            return
         if cmd.get("format") and self.draft["status"] == "idle":
             self.draft = self._new_draft(cmd["format"])
         draft_mod.start(self.draft, now)
 
     def _draft_hover(self, cmd, now):
+        if not self._vision_bp(cmd, now):
+            return
         draft_mod.hover(self.draft, self._champion(cmd.get("champion")), cmd.get("slot"))
 
     def _draft_lock(self, cmd, now):
+        if not self._vision_bp(cmd, now):
+            return
         draft_mod.lock(
             self.draft, series_mod.fearless_blocked(self.series), self._role_stats, now,
             champion=self._champion(cmd.get("champion")), ref=cmd.get("slot"), force=bool(cmd.get("force")),
         )
 
     def _draft_skip(self, cmd, now):
+        if not self._vision_bp(cmd, now):
+            return
         draft_mod.skip(self.draft, self._role_stats, now, cmd.get("slot"))
 
     def _draft_clear(self, cmd, now):
@@ -308,6 +338,8 @@ class Store:
         draft_mod.confirm_lineup(self.draft)
 
     def _draft_timer(self, cmd, now):
+        if cmd.get("source") == "vision" and (not self.ui.get("autoBp", True) or self.draft["status"] != "running"):
+            return          # 识别按游戏里的读秒对表；导播关了自动 BP、或者已经在调分路（不读秒）时不动
         action = cmd.get("action")
         if action == "pause":
             draft_mod.timer_pause(self.draft, now)
@@ -513,7 +545,7 @@ class Store:
             elif before.get("clock") and self.game.get("clockLostAt") is None:
                 self.game["clockLostAt"] = round(max(0.0, game_mod.game_time(self.game, now) - HEARTBEAT_LAG), 1)
         self.game["vision"] = {"at": now, "panel": bool(cmd.get("panel")), "clock": bool(cmd.get("clock")),
-                               "screen": cmd.get("screen")}           # "stats" = 数据机正停在结算页的数据对比上
+                               "screen": cmd.get("screen")}           # "stats" = 结算页的数据对比；"bp" = 选人界面
         game_mod.refresh_lead(self.game, self.rules)        # 面板收起 / 展开会换团队经济的来源
 
     def _ui_set(self, cmd, now):

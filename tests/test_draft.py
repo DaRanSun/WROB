@@ -207,8 +207,10 @@ def test_free_format_picks_in_order_without_bans(store):
     assert draft["free"] and draft["status"] == "idle"
     assert draft["slots"]["blue"]["ban"] == [] and len(draft["slots"]["red"]["pick"]) == 5
     assert all(slot["role"] is None for slot in draft["slots"]["blue"]["pick"])        # 不预设分路
-    order = "".join("B" if turn["side"] == "blue" else "R" for turn in draft["turns"])
-    assert order == "BRRBBRRBBR" and {turn["type"] for turn in draft["turns"]} == {"pick"}
+    # 3 Ban / 自选：连选的两手是同一轮，共用一个 30 秒（赛事征召才是一人一手）
+    assert [(turn["side"], turn["slots"]) for turn in draft["turns"]] == [
+        ("blue", [0]), ("red", [0, 1]), ("blue", [1, 2]), ("red", [2, 3]), ("blue", [3, 4]), ("red", [4])]
+    assert {turn["type"] for turn in draft["turns"]} == {"pick"} and {turn["seconds"] for turn in draft["turns"]} == {25}     # 游戏里选人每轮 25 秒
     assert store.snapshot(0)["draft"]["active"] == []
 
 
@@ -217,15 +219,18 @@ def test_free_pick_then_fix_roles(store):
     free_store(store)
     store.apply({"type": "draft.start"}, 0)
     draft = store.draft
-    assert draft["status"] == "running" and draft["timer"]["running"] is False        # 不读秒
-    store.apply({"type": "draft.lock", "champion": BLUE_PICKS[0]}, 0)                  # 不给槽位就填轮到的：蓝 1
-    assert store.snapshot(0)["draft"]["active"] == [slot("red", "pick", 0)]
+    assert draft["status"] == "running" and draft["timer"]["totalMs"] == 25_000          # 选人每轮 25 秒
+    store.apply({"type": "draft.lock", "champion": BLUE_PICKS[0]}, 5_000)              # 不给槽位就填轮到的：蓝 1
+    assert store.snapshot(0)["draft"]["active"] == [slot("red", "pick", 0), slot("red", "pick", 1)]
+    assert store.draft["timer"]["endsAt"] == 30_000                                    # 红方这一轮（两手）读 25 秒
+    store.apply({"type": "draft.lock", "champion": RED_PICKS[0], "slot": slot("red", "pick", 0)}, 9_000)
+    assert store.draft["timer"]["endsAt"] == 30_000                                    # 同一轮里先选完一个，不重新读
     for index, champion in enumerate(RED_PICKS):
         store.apply({"type": "draft.lock", "champion": champion, "slot": slot("red", "pick", index)}, 0)
     for index, champion in enumerate(BLUE_PICKS[1:], start=1):
         store.apply({"type": "draft.lock", "champion": champion, "slot": slot("blue", "pick", index)}, 0)
     draft = store.draft
-    assert draft["status"] == "lineup" and draft["timer"]["running"] is False
+    assert draft["status"] == "lineup" and draft["timer"]["running"] is False         # 阵容调整不读秒
     assert sorted(slot["role"] for slot in draft["slots"]["blue"]["pick"]) == sorted(ROLES)
     store.apply({"type": "draft.role", "side": "blue", "index": 0, "role": "top"}, 0)
     store.apply({"type": "draft.role", "side": "blue", "index": 3, "role": "bot"}, 0)
@@ -260,13 +265,65 @@ def test_free_pick_not_confirmed_until_full(store):
         store.apply({"type": "draft.confirm"}, 0)
 
 
-def test_free_pick_ignores_fearless(store):
-    """无畏征召开着、上一局用过的英雄：赛事征召里不能选，自选模式里照样能填。"""
-    store.apply({"type": "series.update", "values": {"fearless": "global"}}, 0)
+def test_free_formats_follow_the_fearless_setting(store):
+    """自选、3 Ban 也按系列赛的无畏征召设置：双边无畏时上一局用过的英雄不能选、也不能禁；设成不启用就都能填。"""
+    store.apply({"type": "series.update", "patch": {"fearless": "global"}}, 0)
     play_draft(store)
     store.apply({"type": "draft.confirm"}, 0)
     store.apply({"type": "series.finish_game", "winner": "a"}, 0)
+    store.apply({"type": "draft.reset", "format": "blind3"}, 0)
+    store.apply({"type": "draft.start"}, 0)
+    with pytest.raises(CommandError, match="无畏征召"):
+        store.apply({"type": "draft.lock", "champion": BLUE_PICKS[0], "slot": slot("blue", "ban", 0)}, 0)
     store.apply({"type": "draft.reset", "format": "free"}, 0)
     store.apply({"type": "draft.start"}, 0)
+    with pytest.raises(CommandError, match="无畏征召"):
+        store.apply({"type": "draft.lock", "champion": BLUE_PICKS[0], "slot": slot("blue", "pick", 0)}, 0)
+    store.apply({"type": "series.update", "patch": {"fearless": "off"}}, 0)
     store.apply({"type": "draft.lock", "champion": BLUE_PICKS[0], "slot": slot("blue", "pick", 0)}, 0)
     assert store.draft["slots"]["blue"]["pick"][0]["champion"] == BLUE_PICKS[0]
+
+
+# ---- 3 Ban（自选 + 暗禁）----
+
+def test_blind_bans_open_together_and_may_repeat(store):
+    """双方同时各暗禁 3 个：六个禁用位一起开放，先填哪边都行；两边可以禁同一个，同一方不能禁两次。"""
+    store.apply({"type": "draft.reset", "format": "blind3"}, 0)
+    draft = store.draft
+    assert draft["blindBans"] and len(draft["slots"]["blue"]["ban"]) == 3 and len(draft["slots"]["red"]["ban"]) == 3
+    store.apply({"type": "draft.start"}, 0)
+    assert len(store.snapshot(0)["draft"]["active"]) == 6
+    assert store.draft["timer"]["endsAt"] == 30_000                     # 双方同时禁，共用 30 秒
+    store.apply({"type": "draft.lock", "champion": "yone", "slot": slot("red", "ban", 0)}, 0)      # 红方先填也行
+    store.apply({"type": "draft.lock", "champion": "yone", "slot": slot("blue", "ban", 0)}, 0)     # 两边禁同一个
+    with pytest.raises(CommandError, match="本方已禁用"):
+        store.apply({"type": "draft.lock", "champion": "yone", "slot": slot("blue", "ban", 1)}, 0)
+    store.apply({"type": "draft.skip", "slot": slot("blue", "ban", 1)}, 0)                          # 空 Ban
+    store.apply({"type": "draft.lock", "champion": "zed", "slot": slot("blue", "ban", 2)}, 9_000)     # 蓝方禁完
+    assert store.draft["timer"]["endsAt"] == 30_000                     # 还是同一个 30 秒，不重新读
+    for ref, champion in [(slot("red", "ban", 1), "ahri"), (slot("red", "ban", 2), "jinx")]:
+        store.apply({"type": "draft.lock", "champion": champion, "slot": ref}, 12_000)
+    assert store.draft["timer"]["endsAt"] == 37_000                     # 进了选人：新的 25 秒
+    draft = store.draft
+    assert draft["status"] == "running" and store.snapshot(0)["draft"]["active"] == [slot("blue", "pick", 0)]
+    with pytest.raises(CommandError, match="本局已禁用"):                 # 任何一方禁掉的，两边都不能选
+        store.apply({"type": "draft.lock", "champion": "ahri"}, 0)
+
+
+def test_blind_bans_then_free_picks(store):
+    """禁完按自选的规则走：按顺序选、选完猜分路、确认、进入局内；禁用记进系列赛。"""
+    store.apply({"type": "draft.reset", "format": "blind3"}, 0)
+    store.apply({"type": "draft.start"}, 0)
+    for side, bans in (("blue", ["zed", "jinx", "ahri"]), ("red", ["zed", "lux", "vi"])):
+        for index, champion in enumerate(bans):
+            store.apply({"type": "draft.lock", "champion": champion, "slot": slot(side, "ban", index)}, 0)
+    for side, picks in (("blue", BLUE_PICKS), ("red", RED_PICKS)):
+        for index, champion in enumerate(picks):
+            store.apply({"type": "draft.lock", "champion": champion, "slot": slot(side, "pick", index)}, 0)
+    assert store.draft["status"] == "lineup"
+    store.apply({"type": "draft.confirm"}, 0)
+    store.apply({"type": "game.new"}, 0)
+    store.apply({"type": "game.finish", "winner": "a"}, 0)
+    assert store.series["games"][-1]["bans"] == {"blue": ["zed", "jinx", "ahri"], "red": ["zed", "lux", "vi"]}
+    assert store.postgame["bans"]["red"] == ["zed", "lux", "vi"]
+    assert store.draft["format"] == "blind3"                           # 下一局还是 3 Ban

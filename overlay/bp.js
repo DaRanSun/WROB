@@ -148,10 +148,11 @@
     }
 
     function phaseText(draft) {
-        if (draft.status === 'idle') return draft.free ? '即将开始' : 'BP 即将开始';
+        if (draft.status === 'idle') return draft.free && !draft.blindBans ? '即将开始' : 'BP 即将开始';
         if (draft.status === 'lineup') return '阵容调整';
         if (draft.status === 'done') return '阵容确认';
         const turn = draft.turns[draft.turn];
+        if (turn.both) return '双方' + (turn.type === 'ban' ? '禁用' : '选用');          // 暗禁：双方同时
         return WROB.sideNames[turn.side] + (turn.type === 'ban' ? '禁用' : '选用');
     }
 
@@ -159,9 +160,10 @@
         const { series, draft } = state;
         buildSlots(draft);
         band.dataset.status = draft.status;
-        band.dataset.free = draft.free ? '1' : '';         // 自选模式：没有禁用，不读秒
+        band.dataset.free = draft.free ? '1' : '';         // 自选模式：不读秒
+        band.dataset.bans = String(draft.slots.blue.ban.length);      // 没有禁用位（不带暗禁的自选）时整行禁用都不显示
         const turn = draft.status === 'running' ? draft.turns[draft.turn] : null;
-        band.dataset.turn = turn ? turn.side : '';
+        band.dataset.turn = turn && !turn.both ? turn.side : '';
         const active = new Set(draft.active.map(ref => ref.side + ref.type + ref.index));
 
         SIDES.forEach(side => {
@@ -213,15 +215,17 @@
         if (state) {
             const draft = state.draft;
             const timer = draft.timer;
-            const counting = !draft.free && (draft.status === 'running' || draft.status === 'lineup');
+            // 阵容调整默认不读秒（totalMs 为 0），中间显示 VS
+            const counting = timer.totalMs > 0 && (draft.status === 'running' || draft.status === 'lineup');
             const remaining = timer.running ? Math.max(0, timer.endsAt - WROB.now()) : timer.remainingMs;
             const fraction = counting && timer.totalMs ? Math.min(1, remaining / timer.totalMs) : 0;
             const turn = draft.status === 'running' ? draft.turns[draft.turn] : null;
-            setText(center.timer, counting ? String(Math.ceil(remaining / 1000)) : 'VS');
+            // 和游戏里一样：30 秒的一手从 29 数到 0
+            setText(center.timer, counting ? String(Math.max(0, Math.ceil(remaining / 1000) - 1)) : 'VS');
             center.timer.classList.toggle('is-text', !counting);
             center.timer.classList.toggle('is-low', counting && timer.running && remaining <= LOW_TIME_MS);
             SIDES.forEach(side => {
-                const on = counting && (draft.status === 'lineup' || (turn && turn.side === side));
+                const on = counting && (draft.status === 'lineup' || (turn && (turn.both || turn.side === side)));
                 fills[side].classList.toggle('is-on', Boolean(on));
                 fills[side].style.transform = 'scaleX(' + fraction.toFixed(4) + ')';
             });

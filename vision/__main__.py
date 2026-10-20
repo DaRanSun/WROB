@@ -6,6 +6,8 @@
 
 要先启动 python -m server。导播台“局内”页里被锁住的字段，这里改不动。
 
+画面上没有局内的时钟时（选人界面、结算界面），顺便看是不是选人界面：是就读 BP（vision/bp.py），自动填导播台的 BP
+（导播台“BP”页可以关掉）。
 导播点了“结束本局”之后，局内的数据一概不再读；改为等数据机打开结算页“统计 · 数据对比”，读到双方十个人的数据
 就报给状态中心（赛后面板据此弹出）。导播开始下一局（进入局内）后自动回到读局内数据。
 """
@@ -23,6 +25,7 @@ from state.catalog import load_config
 
 from .layout import LayoutError, load_layout
 from .reader import Reader
+from .bp import BPReader, BPTracker
 from .sources import H264File, ScrcpyStream, SourceError
 from .stats import StatsReader, StatsWatcher
 from .tracker import HEARTBEAT_SECONDS, Tracker
@@ -84,6 +87,15 @@ def describe(command: dict) -> str:
         return f"{minutes:02d}:{seconds:02d} {names[command['what']]}{element}被击杀，{who}"
     if command["type"] == "vision.status":
         return "底部面板" + ("展开" if command["panel"] else "收起") + ("" if command["clock"] else "，时钟读不出")
+    if command["type"].startswith("draft."):
+        if command["type"] == "draft.start":
+            return "BP：数据机进了选人界面，开始"
+        if command["type"] == "draft.timer":
+            return f"BP：读秒对到 {command['seconds']:.1f} 秒"
+        ref = command["slot"]
+        what = {"draft.hover": "亮出", "draft.lock": "锁定", "draft.skip": "空 Ban"}[command["type"]]
+        return (f"BP：{'蓝方' if ref['side'] == 'blue' else '红方'}{'禁用' if ref['type'] == 'ban' else '选用'} {ref['index'] + 1} "
+                f"{what} {command.get('champion') or ''}").rstrip()
     if command["type"] == "postgame.stats":
         def half(rows):
             return " / ".join(f"{row['damage']}（{row['damageShare']}%）" for row in rows)
@@ -99,6 +111,7 @@ class Phase:
         self.checked_at = float("-inf")
         self.ended = False
         self.wants_stats = False
+        self.draft = None                   # 状态中心的 BP（识别填 BP 时要知道流程和哪些槽位已经锁了）
 
     def check(self, now: float) -> str | None:
         """到时间了就问一次。返回 "ended" / "started"（刚结束 / 新开了一局），没变化返回 None。"""
@@ -109,6 +122,7 @@ class Phase:
         if not snapshot:
             return None
         was_ended = self.ended
+        self.draft = snapshot.get("draft")
         postgame = snapshot.get("postgame")
         self.ended = snapshot["game"]["status"] == "ended"
         self.wants_stats = self.ended and bool(postgame) and postgame.get("stats") is None
@@ -146,6 +160,7 @@ def main() -> None:
                               bit_rate=stream.get("bit_rate", 16_000_000), record_to=args.record, aspect=width / height)
     reader, tracker, sender = Reader(), Tracker(), Sender(None if args.dry_run else args.server)
     stats_reader, stats_watcher, phase = StatsReader(), StatsWatcher(), Phase(sender)
+    bp_reader, bp_tracker = BPReader(), BPTracker()
     heartbeat_at = float("-inf")
 
     interval = 1.0 / args.hz
@@ -174,15 +189,27 @@ def main() -> None:
             elif change == "started":
                 tracker, stats_watcher = Tracker(), StatsWatcher()      # 新的一局：上一局的去抖状态全部丢掉
                 print("[识别] 新的一局开始了，重新读局内数据")
+            draft = phase.draft
+            if bp_tracker.sent and draft and draft["status"] == "idle" and not any(
+                    slot["champion"] for side in draft["slots"].values() for slots in side.values() for slot in slots):
+                bp_tracker = BPTracker()        # 导播台换了一局新的 BP（或者重置了）：从头认
+            bp = None
             if phase.ended:
                 commands, screen = [], None
-                if phase.wants_stats:
+                try:
+                    bp = bp_reader.read(frame)
+                except LayoutError:
+                    bp = None
+                if bp:
+                    screen = "bp"
+                elif phase.wants_stats:
                     try:
                         stats = stats_reader.read(frame)
                     except LayoutError:
                         stats = None
                     screen = "stats" if stats else None
                     commands = stats_watcher.update(stats, now)
+                commands += bp_tracker.update(bp, now, draft)
                 if now - heartbeat_at >= HEARTBEAT_SECONDS:
                     heartbeat_at = now
                     commands.append({"type": "vision.status", "panel": False, "clock": False, "screen": screen})
@@ -201,9 +228,16 @@ def main() -> None:
                     snapshot = sender.snapshot()
                     if snapshot:
                         commands += tracker.reconcile(snapshot, now)
-                if sender.base is None and reading["clock"] is None and not waiting:
-                    # 不连状态中心（--dry-run 看录像）时不知道导播有没有结束本局：画面上没有时钟，就顺便找找结算页
-                    commands += stats_watcher.update(stats_reader.read(frame), now)
+                if reading["clock"] is None and not waiting:
+                    bp = bp_reader.read(frame)          # 画面上没有局内时钟：是不是选人界面
+                    commands += bp_tracker.update(bp, now, draft)
+                    if bp:
+                        for command in commands:
+                            if command["type"] == "vision.status":
+                                command["screen"] = "bp"
+                    elif sender.base is None:
+                        # 不连状态中心（--dry-run 看录像）时不知道导播有没有结束本局：顺便找找结算页
+                        commands += stats_watcher.update(stats_reader.read(frame), now)
             for command in commands:
                 sender.send(command)
                 if not args.quiet and command["type"] != "vision.status":
