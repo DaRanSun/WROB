@@ -4,7 +4,7 @@
 (function () {
     'use strict';
 
-    const { stage, matchups, laneRows } = WROB.panel;
+    const { stage } = WROB.panel;
     const fxLayer = document.getElementById('fx');
     const chart = document.getElementById('chart');
     const SIDES = ['blue', 'red'];
@@ -50,6 +50,7 @@
     }
 
     // ---- 连杀：双杀在这名选手那一栏，三杀在这一方的半边，四杀整个底部，五杀全屏 ----
+    // 底部是对位面板时“那一栏”是一行；切成团战 UI 时是一列（窄而高，排法另有一套，见 effects.css 的 is-column）
 
     const multikillNodes = {};          // 同一名选手的上一个连杀还在放：直接换成新的
     function playMultikill(event, state) {
@@ -57,18 +58,19 @@
         if (!look) return;
         const known = event.index != null;
         const player = known ? state.game.players[event.side][event.index] : {};
-        const lanes = laneRows.map(row => row[event.side].box);
+        const cells = WROB.roles.map((_, index) => WROB.panel.cell(event.side, index));
         // 不知道是谁的双杀：放在这一方的半边（和三杀一样大）
-        const box = event.count === 2 && known ? rectOf(lanes[event.index])
-            : event.count <= 3 ? union(lanes.map(rectOf))
-            : event.count === 4 ? rectOf(matchups)
+        const box = event.count === 2 && known ? rectOf(cells[event.index])
+            : event.count <= 3 ? union(cells.map(rectOf))
+            : event.count === 4 ? rectOf(WROB.panel.bottom())
             : { x: 0, y: 0, w: stage.offsetWidth, h: stage.offsetHeight };
         // 同一方上一个多杀还没放完（游戏里二连破、三连破会接连出现）：直接换成新的
         const key = event.side;
         if (multikillNodes[key]) multikillNodes[key].remove();
 
         const hold = Number(config.hold[look.key]) || 3;
-        const node = element('div', 'fx-mk fx-' + look.key + ' ' + event.side + (event.count === 2 && !known ? ' is-wide' : ''));
+        const shape = event.count !== 2 ? '' : !known ? ' is-wide' : WROB.panel.teamfight() ? ' is-column' : '';
+        const node = element('div', 'fx-mk fx-' + look.key + ' ' + event.side + shape);
         place(node, box);
         node.style.setProperty('--hold', hold + 's');
         const face = element('span', 'fx-mk-face');
@@ -93,7 +95,7 @@
         if (!queue.running) nextItem(event.side, event.index, queue);
     }
     function nextItem(side, index, queue) {
-        const portrait = laneRows[index][side].portrait;
+        const portrait = WROB.panel.portrait(side, index);          // 团战 UI 显示时是那里的头像
         portrait.querySelectorAll('.fx-item').forEach(node => node.remove());
         const name = queue.items.shift();
         queue.running = Boolean(name);

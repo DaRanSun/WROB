@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from state import CommandError
@@ -287,7 +289,7 @@ def test_respawn_drops_the_elder_buff(live):
 
 
 def test_items(live, catalog):
-    assert len(catalog.items) == 176 and "潜行药剂" not in catalog.items
+    assert len(catalog.items) == 177 and "潜行药剂" not in catalog.items and "放血者的诅咒" in catalog.items      # 176 件来自掌盟截图，1 件后来补的（extra）
     assert live.game["players"]["blue"][0]["items"] == [None] * 6
     build = ["铁板靴", None, None, "长剑", "破舰者", "黄昏与黎明"]
     live.apply({"type": "game.set", "path": "blue.0.items", "value": build}, 0)
@@ -412,10 +414,97 @@ def test_level_and_ult(live):
 
 
 def test_display_settings(store):
-    assert store.ui == {"mode": "single", "buffs": True, "matchups": True, "chart": False, "effects": True, "autoBp": True}
+    assert store.ui == {"mode": "single", "buffs": True, "matchups": True, "chart": False, "teamfight": False,
+                        "loadout": False, "effects": True, "autoBp": True}
     store.apply({"type": "ui.set", "values": {"mode": "dual", "buffs": 0, "chart": True}}, 0)
-    assert store.snapshot(0)["ui"] == {"mode": "dual", "buffs": False, "matchups": True, "chart": True, "effects": True, "autoBp": True}
+    assert store.snapshot(0)["ui"] == {"mode": "dual", "buffs": False, "matchups": True, "chart": True, "teamfight": False,
+                                       "loadout": False, "effects": True, "autoBp": True}
     with pytest.raises(CommandError, match="single"):
         store.apply({"type": "ui.set", "values": {"mode": "triple"}}, 0)
     with pytest.raises(CommandError, match="没有这个显示设置"):
         store.apply({"type": "ui.set", "values": {"objectives": True}}, 0)      # 刷新计时牌已经取消了
+
+
+def test_teamfight_ui(store):
+    """团战 UI 只在双设备下有；和经济曲线占同一块地方，打开一个就收起另一个。"""
+    with pytest.raises(CommandError, match="双设备"):
+        store.apply({"type": "ui.set", "values": {"teamfight": True}}, 0)
+    assert store.ui["teamfight"] is False
+    store.apply({"type": "ui.set", "values": {"mode": "dual", "chart": True}}, 0)
+    store.apply({"type": "ui.set", "values": {"teamfight": True}}, 0)               # T：经济曲线让位
+    assert (store.ui["teamfight"], store.ui["chart"]) == (True, False)
+    store.apply({"type": "ui.set", "values": {"chart": True}}, 0)                   # E：团战 UI 让位
+    assert (store.ui["teamfight"], store.ui["chart"]) == (False, True)
+    store.apply({"type": "ui.set", "values": {"teamfight": True}}, 0)
+    store.apply({"type": "ui.set", "values": {"teamfight": False}}, 0)              # 再按一次 T：回到对位面板
+    assert (store.ui["teamfight"], store.ui["chart"]) == (False, False)
+    with pytest.raises(CommandError, match="不能同时"):
+        store.apply({"type": "ui.set", "values": {"teamfight": True, "chart": True}}, 0)
+    assert (store.ui["teamfight"], store.ui["chart"]) == (False, False)             # 被拒的命令一项都不改
+    store.apply({"type": "ui.set", "values": {"teamfight": True}}, 0)
+    store.apply({"type": "ui.set", "values": {"buffs": False}}, 0)                  # 别的开关不碰它
+    assert store.ui["teamfight"] is True
+    store.apply({"type": "ui.set", "values": {"mode": "single"}}, 0)                # 换回单设备就收起
+    assert store.ui["teamfight"] is False
+
+
+def test_teamfight_ui_saved(catalog, rules, tmp_path):
+    from state.catalog import load_config
+    from state.store import Store
+
+    path = tmp_path / "state.json"
+    first = Store(catalog, load_config("app"), load_config("draft"), rules, path=path)
+    first.apply({"type": "ui.set", "values": {"mode": "dual", "teamfight": True}}, 0)
+    first.save()
+    assert Store(catalog, load_config("app"), load_config("draft"), rules, path=path).ui["teamfight"] is True
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved["ui"]["mode"] = "single"                     # 手改过的存档：单设备却开着团战 UI
+    path.write_text(json.dumps(saved), encoding="utf-8")
+    assert Store(catalog, load_config("app"), load_config("draft"), rules, path=path).ui["teamfight"] is False
+
+
+def test_key_items(catalog):
+    """团战 UI 的关键装备：会读冷却条的（冷却超过 6 秒），去掉卢登和两双三级鞋。"""
+    keys = set(catalog.public()["keyItems"])
+    assert {"中娅沙漏", "守护天使", "水银弯刀", "芬布尔之冬"} <= keys
+    assert not {"卢登的回声", "带链碾碎者", "装甲战靴"} & keys      # 用户点名去掉
+    assert "炽天使之拥" not in keys                     # 手游原生界面不显示它的状态，本来就不读条
+    assert not {"星蚀", "耀光", "三相之力"} & keys       # 冷却 6 秒以内的不读条，也就不算
+    assert keys <= set(catalog.items)
+
+
+def test_item_values(catalog):
+    """装备价值表（config/loadout.yaml）：装备库里每一件都有价值；进化装备和进化前的一样。"""
+    values = catalog.item_values
+    assert set(values) == set(catalog.items)
+    assert (values["天启戒指"], values["速度之靴"], values["中娅沙漏"], values["三相之力"], values["守望者铠甲"]) == (300, 400, 3300, 3333, 1050)
+    for evolved, base in [("歌之权冠", "耳语头环"), ("炽天使之拥", "大天使之杖"), ("芬布尔之冬", "冬之降临"),
+                          ("魔切", "魔宗"), ("山脉壁垒", "圣物之盾"), ("黑雾巨镰", "幽魂镰刀")]:
+        assert values[evolved] == values[base]
+
+
+def test_loadout(store):
+    """双方身上全部装备（含鞋子、散件）的价值总和，和各占的百分比（加起来 100）。"""
+    view = store.snapshot(0)["game"]["loadout"]
+    assert view == {"blue": {"value": 0, "share": None}, "red": {"value": 0, "share": None}}      # 都还没出装：没有百分比
+    store.apply({"type": "game.set", "values": {
+        "blue.0.items": ["速度之靴", "长剑", None, None, None, None],                        # 400 + 500
+        "blue.3.items": ["狂战士胫甲", "无尽之刃", "歌之权冠", None, None, None],             # 1200 + 3400 + 2400（进化前是耳语头环）
+        "red.2.items": ["明朗之靴", "中娅沙漏", "卢登的回声", "增幅典籍", None, None],       # 1000 + 3300 + 2800 + 500
+    }}, 0)
+    view = store.snapshot(0)["game"]["loadout"]
+    assert view["blue"]["value"] == 900 + 7000 and view["red"]["value"] == 7600
+    assert (view["blue"]["share"], view["red"]["share"]) == (51, 49)                   # 7900 / 15500 = 50.97%
+    assert view["blue"]["share"] + view["red"]["share"] == 100
+
+
+def test_loadout_ui(store):
+    """装备价值只在双设备下有；和团战 UI、经济曲线互不影响；换回单设备时收起。"""
+    with pytest.raises(CommandError, match="装备价值只用于双设备"):
+        store.apply({"type": "ui.set", "values": {"loadout": True}}, 0)
+    store.apply({"type": "ui.set", "values": {"mode": "dual", "loadout": True}}, 0)
+    store.apply({"type": "ui.set", "values": {"teamfight": True}}, 0)
+    store.apply({"type": "ui.set", "values": {"chart": True}}, 0)
+    assert (store.ui["loadout"], store.ui["teamfight"], store.ui["chart"]) == (True, False, True)
+    store.apply({"type": "ui.set", "values": {"mode": "single"}}, 0)
+    assert store.ui["loadout"] is False

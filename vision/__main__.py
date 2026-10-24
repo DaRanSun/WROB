@@ -78,7 +78,8 @@ def describe(command: dict) -> str:
             if path.endswith(".items"):
                 return f"{path}=[{' '.join(item or '·' for item in value)}]"
             return f"{path}={value}"
-        return "  ".join(show(path, value) for path, value in command["values"].items())
+        # 血条一秒报好几次，不打印
+        return "  ".join(show(path, value) for path, value in command["values"].items() if not path.endswith(".bars"))
     if command["type"] == "game.objective":
         minutes, seconds = divmod(int(command["t"]), 60)
         names = {"dragon": "元素亚龙", "herald": "峡谷先锋", "baron": "纳什男爵", "elder": "远古巨龙"}
@@ -240,8 +241,9 @@ def main() -> None:
                         commands += stats_watcher.update(stats_reader.read(frame), now)
             for command in commands:
                 sender.send(command)
-                if not args.quiet and command["type"] != "vision.status":
-                    print(f"[识别] {describe(command)}")
+                text = "" if args.quiet or command["type"] == "vision.status" else describe(command)
+                if text:
+                    print(f"[识别] {text}")
     except SourceError as error:
         sys.exit(f"[识别] {error}")
     except KeyboardInterrupt:

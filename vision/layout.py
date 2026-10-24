@@ -123,6 +123,19 @@ def ult_fields(frame: np.ndarray, layout: dict) -> dict[str, np.ndarray]:
     return fields
 
 
+def bar_fields(frame: np.ndarray, layout: dict) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """{"blue.2": (血条那几行, 两条之间的黑缝, 资源条那几行), …}"""
+    spec = layout["bars"]
+    fields = {}
+    for side in SIDES:
+        x0, x1 = spec["x"][side]
+        for index in range(layout["cards"]["count"]):
+            drop = layout["cards"]["pitch"] * index
+            fields[f"{side}.{index}"] = tuple(frame[spec[part][side][0] + drop:spec[part][side][1] + drop, x0:x1]
+                                              for part in ("hp", "gap", "resource"))
+    return fields
+
+
 def portrait_is_grey(roi: np.ndarray) -> bool:
     """头像这一块是不是被游戏置成了灰色（阵亡）。红色的倒计时数字不算在内，只看其余像素有没有颜色。
 

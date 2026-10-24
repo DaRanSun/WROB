@@ -86,6 +86,22 @@
     background: linear-gradient(90deg, var(--surface), var(--side-deep) 30%, color-mix(in srgb, var(--side) 80%, var(--surface)) 50%, var(--side-deep) 70%, var(--surface));
 }
 
+/* 团战 UI 里的双杀：框是这名选手的那一栏（156×240，窄而高），从上往下展开，头像在上、标题和选手名在下 */
+.fx-mk.fx-double.is-column {
+    flex-direction: column;
+    justify-content: center;
+    gap: calc(var(--w) * 0.06);
+    padding: 0 calc(var(--w) * 0.05);
+    text-align: center;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--side) 85%, var(--surface)), var(--side-deep) 70%, var(--surface));
+    animation-name: fx-wipe-down, fx-out;
+}
+.fx-mk.fx-double.is-column .fx-mk-face { width: calc(var(--w) * 0.52); height: calc(var(--w) * 0.52); }
+.fx-mk.fx-double.is-column .fx-mk-copy { flex-direction: column; align-items: center; gap: calc(var(--w) * 0.03); max-width: 100%; }
+.fx-mk.fx-double.is-column .fx-mk-title { font-size: calc(var(--w) * 0.15); }
+.fx-mk.fx-double.is-column .fx-mk-sub { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: calc(var(--w) * 0.085); }
+@keyframes fx-wipe-down { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 0 0); } }
+
 /* 五杀：全屏，压暗画面，中间一个巨大的标题，旁边是英雄立绘 */
 .fx-penta {
     justify-content: center;

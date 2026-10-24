@@ -22,6 +22,9 @@ values 里每个选手还有 "<side>.<i>.level"（等级，1–15）和 "<side>.
 values 里每个选手还有 "<side>.<i>.spells"（两个召唤师技能）和 "<side>.<i>.rune"（基石符文），和装备一样：
 名字 = 认出来了，"?" 或 None = 这一帧认不出（冷却中被压暗、图标库里没有）。
 
+values 里每个选手还有 "<side>.<i>.bars"：选手卡片上的血条和资源条 (血量, 护盾, 资源, 资源条颜色)，前三个是占整条的比例，
+颜色是 "mana" / "energy" / "other" / None（资源条是空的）。阵亡时血条框不显示，这一项不出现。
+
 dragons 和 chips 只在时钟读得出（确实是对局画面）时才有。
 
 顶部条的 blue.gold / red.gold 只精确到 0.1K；blue.<i>.gold 是精确值，i = 0–4 对应上野中下辅。
@@ -50,6 +53,9 @@ KDA = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{1,2})")
 # 就直接沿用上次的结果。不能用“平均差多少”来判断：只变了一位数字时，平均下来和视频压缩的噪声差不多。
 PIXEL_DELTA = 48
 PIXEL_COUNT = 4
+BAR_DARK = 45           # 血条框是黑的：两条之间那条缝里的像素最亮的分量也不到这个数
+BAR_FRAME = 0.8         # 缝里有一行至少这么多像素是黑的，才算血条框在
+BAR_KNOWN = 0.9         # 血条上至少这么多列认得出是血、空、护盾，才算读得出
 
 
 def light(roi: np.ndarray) -> float:
@@ -111,6 +117,43 @@ def ult_progress(roi: np.ndarray) -> float:
     b, g, r = (roi[..., index].astype(np.int16) for index in range(3))
     green = (g >= 120) & (g - r >= 50) & (g - b >= 50)
     return round(float(green[inside].mean()), 3)
+
+
+def _columns(block: np.ndarray) -> np.ndarray:
+    """一条横条（几行 × 宽 × BGR）按列取中位数：条的上下边缘被压缩抹糊了，取中间那行最稳。"""
+    return np.median(block.astype(np.int16), axis=0)
+
+
+def hp_bar(block: np.ndarray, gap: np.ndarray) -> tuple[float, float] | None:
+    """选手卡片上的血条：(血量, 护盾)，各占整条的比例。血条框不在（阵亡、被挡住）返回 None。
+
+    每一列归成一类：有血（绿色；低血量时黄 / 橙）、空（黑；低血量时暗红或亮红）、护盾（接在后面的灰色）。
+    归不进这几类的列太多，说明这里不是血条。
+    """
+    if (gap.max(axis=2) < BAR_DARK).mean(axis=1).max() < BAR_FRAME:
+        return None
+    pixels = _columns(block)
+    b, g, r = pixels[:, 0], pixels[:, 1], pixels[:, 2]
+    high, low = pixels.max(axis=1), pixels.min(axis=1)
+    health = (g >= 45) & (g - b >= 18) & (g * 10 >= 3 * r)
+    empty = (high < 50) | ((r >= 50) & (r > 2 * g) & (r > 2 * b))
+    shield = ~health & (high - low <= 40) & (high >= 80)
+    if (health | empty | shield).mean() < BAR_KNOWN:
+        return None
+    return round(float(health.mean()), 3), round(float(shield.mean()), 3)
+
+
+def resource_bar(block: np.ndarray) -> tuple[float, str | None]:
+    """资源条：(还剩多少, 颜色)。颜色 "mana"（蓝）/ "energy"（黄）/ "other"；整条是空的时候看不出颜色，为 None。
+    没有资源条的英雄（锐雯）一直是 (0, None)。"""
+    pixels = _columns(block)
+    high, low = pixels.max(axis=1), pixels.min(axis=1)
+    filled = (high >= 90) & (high - low >= 50)
+    if not filled.any():
+        return 0.0, None
+    b, g, r = pixels[filled].mean(axis=0)
+    kind = "mana" if b > r + 40 else "energy" if r > 110 and g > 90 and b < 90 else "other"
+    return round(float(filled.mean()), 3), kind
 
 
 def parse_count(text: str):
@@ -253,6 +296,10 @@ class Reader:
                 result["weak"] = sorted(self.weak)
             for name, roi in layout_mod.ult_fields(frame, self.layout).items():
                 values[name] = ult_progress(roi)
+            for player, (hp, gap, resource) in layout_mod.bar_fields(frame, self.layout).items():
+                health = hp_bar(hp, gap)
+                if health is not None:
+                    values[f"{player}.bars"] = (*health, *resource_bar(resource))
             cells = layout_mod.spell_cells(frame, self.layout)
             for side in SIDES:
                 for index in range(self.layout["cards"]["count"]):

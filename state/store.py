@@ -26,9 +26,13 @@ UNDO_DEPTH = 100
 #   buffs    男爵 / 远古龙 buff 的剩余时间和 Power play。（野怪的刷新倒计时原生界面都有，面板不再显示。）
 #   matchups 底部的对位面板。
 #   chart    经济曲线：导播插入时顶替底部面板，收起后面板回来。
+#   teamfight 团战 UI（只用于双设备）：顶替底部面板，十个人一人一栏，只留召唤师技能、大招、关键装备、等级、血条。
+#            和经济曲线互相顶替（打开一个就收起另一个），两个都收起就是对位面板。
+#   loadout  装备价值（只用于双设备）：底部两侧各一块，双方身上装备的价值总和和各占的百分比。团战 UI 开着时不管它都显示。
 #   effects  连杀、出装提示、野怪 / 龙魂播报这些自动特效（导播手动放的不受它管）。
 #   autoBp   画面识别自动填 BP（数据机停在选人界面时）。关掉后识别发来的 BP 一概不收，全部手填。
-DEFAULT_UI = {"mode": "single", "buffs": True, "matchups": True, "chart": False, "effects": True, "autoBp": True}
+DEFAULT_UI = {"mode": "single", "buffs": True, "matchups": True, "chart": False, "teamfight": False, "loadout": False,
+              "effects": True, "autoBp": True}
 UI_MODES = ("single", "dual")
 # 一局结束后识别发来的命令里，只收这些：结算页的数据，和下一局的 BP（下一局的选人界面出现时，上一局还挂着赛后画面）
 VISION_AFTER_END = ("postgame.stats", "draft.start", "draft.hover", "draft.lock", "draft.skip")
@@ -44,6 +48,18 @@ def ui_value(key: str, value):
             raise CommandError("画面模式只有 single（单设备）和 dual（双设备）")
         return value
     return bool(value)
+
+
+DUAL_ONLY = {"teamfight": "团战 UI 只用于双设备模式", "loadout": "装备价值只用于双设备模式"}      # 单设备没有放它们的地方
+
+
+def settle_ui(ui: dict) -> dict:
+    """底部那块地方同一时间只放一样：团战 UI 和经济曲线不会同时开着。团战 UI、装备价值只在双设备下有。"""
+    if ui["chart"]:
+        ui["teamfight"] = False
+    if ui["mode"] != "dual":
+        ui.update({key: False for key in DUAL_ONLY})
+    return ui
 
 
 def now_ms() -> int:
@@ -92,10 +108,12 @@ class Store:
                     player.setdefault("cooldowns", {})
                     player.setdefault("level", None)
                     player.setdefault("ult", None)
+                    player.setdefault("bars", None)
             self.ui = dict(DEFAULT_UI)
             for key, value in (saved.get("ui") or {}).items():          # 旧存档里已经不用的开关、不认识的模式都丢掉
                 if key in DEFAULT_UI and (key != "mode" or value in UI_MODES):
                     self.ui[key] = ui_value(key, value)
+            self.ui = settle_ui(self.ui)
         except (ValueError, KeyError) as error:
             # 存档坏了不能挡住开播：留个副本，从空白状态开始。
             self.path.replace(self.path.with_suffix(".bad.json"))
@@ -136,7 +154,7 @@ class Store:
                 "used": draft_mod.used_this_game(self.draft),
                 "fearless": series_mod.fearless_blocked(series),
             },
-            "game": game_mod.view(self.game, self.rules),
+            "game": {**game_mod.view(self.game, self.rules), "loadout": game_mod.loadout(self.game, self.catalog.item_values)},
             "postgame": self.postgame,
             "ui": self.ui,
             "canUndo": bool(self.history),
@@ -549,8 +567,16 @@ class Store:
         game_mod.refresh_lead(self.game, self.rules)        # 面板收起 / 展开会换团队经济的来源
 
     def _ui_set(self, cmd, now):
-        for key, value in (cmd.get("values") or {}).items():
-            self.ui[key] = ui_value(key, value)
+        values = {key: ui_value(key, value) for key, value in (cmd.get("values") or {}).items()}
+        ui = dict(self.ui, **values)
+        for key, refusal in DUAL_ONLY.items():
+            if values.get(key) and ui["mode"] != "dual":
+                raise CommandError(refusal)
+        if values.get("teamfight"):
+            if values.get("chart"):
+                raise CommandError("经济曲线和团战 UI 占同一块地方，不能同时打开")
+            ui["chart"] = False             # 打开团战 UI 时收起经济曲线；反过来由 settle_ui 收起团战 UI
+        self.ui.update(settle_ui(ui))
 
     # 命令名 → (方法, 是否进撤销栈)。撤销只管 BP 和系列赛；局内数值一直在变，用各自的“撤掉上一条”。
     COMMANDS = {

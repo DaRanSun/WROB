@@ -32,7 +32,8 @@ OBJECTIVES = ("herald", "dragon", "baron", "elder")
 TEAM_FIELDS = {"kills": int, "towers": int, "gold": "gold"}
 PLAYER_FIELDS = {"gold": "gold", "kills": int, "deaths": int, "assists": int, "alive": bool, "name": str,
                  "champion": "slug", "respawn": "respawn", "items": "items",
-                 "spells": "spells", "rune": "slug", "cooldowns": "cooldowns", "level": "level", "ult": "ult"}
+                 "spells": "spells", "rune": "slug", "cooldowns": "cooldowns", "level": "level", "ult": "ult",
+                 "bars": "bars"}
 ITEM_SLOTS = 6
 
 
@@ -77,7 +78,7 @@ def new_game() -> dict:
             side: [
                 {"role": role, "name": "", "champion": None, "gold": None,
                  "kills": 0, "deaths": 0, "assists": 0, "alive": True, "respawn": None, "items": [None] * ITEM_SLOTS,
-                 "spells": [None, None], "rune": None, "cooldowns": {}, "level": None, "ult": None}
+                 "spells": [None, None], "rune": None, "cooldowns": {}, "level": None, "ult": None, "bars": None}
                 for role in ROLES
             ]
             for side in SIDES
@@ -144,6 +145,13 @@ def _coerce(kind, value):
         return None if value in (None, "") else min(15, max(1, int(value)))
     if kind == "ult":                           # 大招转好了多少，0–1；空 = 不知道
         return None if value in (None, "") else min(1.0, max(0.0, round(float(value), 2)))
+    if kind == "bars":                          # 卡片上的血条：血量、护盾、资源是比例（0–1），resource 是资源条颜色；空 = 不知道
+        if not value:
+            return None
+        if not isinstance(value, dict):
+            raise CommandError("血条要给 {hp, shield, mana, resource}")
+        ratio = {key: min(1.0, max(0.0, round(float(value.get(key) or 0), 2))) for key in ("hp", "shield", "mana")}
+        return {**ratio, "resource": str(value["resource"]) if value.get("resource") else None}
     if kind == "spells":
         if not isinstance(value, (list, tuple)) or len(value) != 2:
             raise CommandError("召唤师技能要给两个（没有的写 null）")
@@ -456,6 +464,17 @@ def tick(game: dict, now: int) -> bool:
 
 
 # ---- 给前端的视图 ----
+
+def loadout(game: dict, values: dict[str, int]) -> dict:
+    """装备价值（Loadout value）：双方身上全部装备（含鞋子、散件）的商店总价，和各占双方总和的百分比（加起来是 100）。
+    价值表里没有的装备不算（装备库里的都有）。双方都还没有装备时没有百分比。"""
+    total = {side: sum(values.get(item, 0) for player in game["players"][side] for item in player["items"] if item)
+             for side in SIDES}
+    both = total["blue"] + total["red"]
+    blue = round(100 * total["blue"] / both) if both else None
+    return {side: {"value": total[side], "share": None if blue is None else (blue if side == "blue" else 100 - blue)}
+            for side in SIDES}
+
 
 def view(game: dict, rules: dict) -> dict:
     objectives = objectives_view(game, rules)

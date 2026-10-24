@@ -26,6 +26,9 @@ button.primary { background: #1f6fd0; border-color: #3b8cf0; font-weight: 600; }
 button.primary:hover:not(:disabled) { background: #2a7de0; }
 button.danger { color: #ffb3ba; }
 button.is-armed { background: #a3232f; border-color: #ff6b78; color: #fff; }
+/* 按钮上标着的快捷键 */
+button kbd { margin-left: 8px; padding: 0 5px; border: 1px solid currentColor; border-radius: 3px; font-family: inherit; font-size: 11px; font-weight: 600; line-height: 15px; opacity: 0.75; }
+.shortcut-hint { font-size: 12px; }
 input[type="text"], input[type="search"], select {
     padding: 6px 9px;
     background: #070b13;

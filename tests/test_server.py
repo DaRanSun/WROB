@@ -45,7 +45,7 @@ def test_catalog():
         assert {team["id"] for team in catalog["teams"]} >= {"TT", "FP", "RV", "KBG", "WBG", "SS1", "WHG", "ACE"}
         assert all(len(team["players"]) == 5 and all(team["players"].values()) for team in catalog["teams"])
         assert catalog["formats"]["tournament"] == "赛事征召"
-        assert len(catalog["items"]) == 176 and "狂战士胫甲" in catalog["items"]
+        assert len(catalog["items"]) == 177 and "狂战士胫甲" in catalog["items"]
         assert catalog["rules"]["dragon"]["elements"] == ["infernal", "mountain", "ocean"]
         # assets/dragons/ 里放了哪几种元素龙的图标：属性 → 地址
         assert set(catalog["dragonIcons"]) <= set(catalog["rules"]["dragon"]["elements"])

@@ -45,6 +45,8 @@ class Catalog:
         self.champions = self._champions()
         self.items = self._items()
         self.legendary = set(load_config("items").get("legendary") or []) & set(self.items)
+        self.key_items = self._key_items(self.items)
+        self.item_values = self._item_values(self.items)
         self.teams = self._local_teams() + self._wrpedia_teams(league)
 
     # ---- 英雄 ----
@@ -117,7 +119,31 @@ class Catalog:
         """装备的名字（同时是编号）。图标在 assets/items/<名字>.png，由 tools/build_items.py 生成。"""
         config = load_config("items")
         excluded = set(config.get("exclude") or [])
-        return [name for name in config.get("items") or [] if name not in excluded]
+        names = list(config.get("items") or []) + list(config.get("extra") or {})        # extra：后来单独补的
+        return [name for name in names if name not in excluded]
+
+    @staticmethod
+    def _key_items(items: list[str]) -> list[str]:
+        """团战 UI 显示的关键装备：会读冷却条的那些（冷却超过 show_above 秒），去掉 teamfight_exclude 里的。"""
+        timing = load_config("cooldowns")
+        above = timing.get("show_above", 0)
+        skip = set(timing.get("teamfight_exclude") or [])
+        cooling = {name for name, seconds in (timing.get("items") or {}).items() if seconds > above and name not in skip}
+        return [name for name in items if name in cooling]
+
+    @staticmethod
+    def _item_values(items: list[str]) -> dict[str, int]:
+        """装备价值（config/loadout.yaml）：名字 → 商店总价。进化装备按进化前那件算。名字写错了启动时就报出来。"""
+        config = load_config("loadout")
+        values = {name: int(value) for name, value in (config.get("values") or {}).items()}
+        for evolved, base in (config.get("evolved") or {}).items():
+            if base not in values:
+                raise ValueError(f"config/loadout.yaml：{evolved} 由 {base} 进化，但 values 里没有 {base}")
+            values[evolved] = values[base]
+        unknown = sorted(set(values) - set(items))
+        if unknown:
+            raise ValueError(f"config/loadout.yaml 里这些名字装备库（items.yaml）里没有：{'、'.join(unknown)}")
+        return values
 
     # ---- 战队 ----
 
@@ -164,4 +190,4 @@ class Catalog:
 
     def public(self) -> dict:
         return {"champions": list(self.champions.values()), "teams": self.teams, "items": self.items,
-                "legendary": [name for name in self.items if name in self.legendary]}
+                "legendary": [name for name in self.items if name in self.legendary], "keyItems": self.key_items}

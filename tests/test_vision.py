@@ -13,9 +13,10 @@ import pytest
 from vision import layout as layout_mod
 from vision import objectives
 from vision.items import UNKNOWN, ItemMatcher
-from vision.reader import Reader, ult_progress
+from vision.reader import Reader, hp_bar, resource_bar, ult_progress
 from vision.text import DIGITS, TEMPLATES, GlyphSet
-from vision.tracker import CHIP_GONE_CONFIRM, DRAGON_CONFIRM, ITEM_GONE_CONFIRM, REVIVE_CONFIRM, Slot, Tracker
+from vision.tracker import (BAR_EVERY, BAR_KIND_CONFIRM, CHIP_GONE_CONFIRM, DRAGON_CONFIRM, ITEM_GONE_CONFIRM, REVIVE_CONFIRM,
+                            Slot, Tracker)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 # 每一块在 2800×1264 画面里的左上角 (y, x)
@@ -341,7 +342,7 @@ def test_other_aspect_ratio_is_refused(reader):
 
 def test_item_matcher_on_its_own_library():
     matcher = ItemMatcher()
-    assert len(matcher.names) == 176 and "潜行药剂" not in matcher.names
+    assert len(matcher.names) == 177 and "潜行药剂" not in matcher.names and "放血者的诅咒" in matcher.names
     with np.load(TEMPLATES / "items.npz") as data:
         icons = data["icons"]
     assert [matcher.match(icon) for icon in icons] == matcher.names         # 库里的每一件都认得出自己
@@ -447,6 +448,55 @@ def test_every_group_has_all_digits():
         assert DIGITS <= GlyphSet.load(name).characters, name
     assert {"/"} <= GlyphSet.load("panel").characters
     assert {".", "K"} <= GlyphSet.load("top-gold").characters
+
+
+# 选手卡片上的血条（tests/fixtures/bars.npz）：两段实时录像里裁的卡片下半截（36×108，左上角是那张卡片的
+# (566 + 155×序号, 蓝方 172 / 红方 2520)）。期望值是把每一块放大 4 倍，量绿色 / 灰色 / 蓝黄色到哪一列，和读数对过的。
+BARS = {
+    "blue normal": ((0.38, 0.0), (0.21, "mana")),
+    "low yellow": ((0.17, 0.0), (0.10, "mana")),          # 低血量：血是黄的，空的那段是暗红
+    "dead": (None, (0.0, None)),                           # 阵亡：血条框不在
+    "energy": ((0.82, 0.0), (1.0, "energy")),
+    "riven": ((0.80, 0.04), (0.0, None)),                  # 没有资源条的英雄
+    "red low": ((0.14, 0.0), (0.95, "mana")),
+    "red normal": ((0.52, 0.0), (0.93, "mana")),
+    "shield": ((0.68, 0.11), (0.35, "energy")),            # 血后面接着一段灰色的护盾
+}
+
+
+def bar_frames():
+    with np.load(FIXTURES / "bars.npz") as data:
+        for crop, side, index, name in zip(data["crops"], data["sides"], data["index"], data["names"]):
+            frame = np.zeros((1264, 2800, 3), np.uint8)
+            y, x = 566 + 155 * int(index), 172 if side == "blue" else 2520
+            frame[y:y + crop.shape[0], x:x + crop.shape[1]] = crop
+            yield str(name), layout_mod.bar_fields(frame, layout_mod.load_layout())[f"{side}.{int(index)}"]
+
+
+def test_reads_hp_and_resource_bars():
+    seen = set()
+    for name, (hp, gap, resource) in bar_frames():
+        seen.add(name)
+        health, mana = hp_bar(hp, gap), resource_bar(resource)
+        if name == "flash":                     # 低血量时整条闪成亮红，橙色的血和底色分不太开：只要求读出来很少
+            assert health is not None and health[0] < 0.25
+            continue
+        expected_health, expected_mana = BARS[name]
+        if expected_health is None:
+            assert health is None, name
+        else:
+            assert health == pytest.approx(expected_health, abs=0.02), name
+        assert mana[0] == pytest.approx(expected_mana[0], abs=0.02) and mana[1] == expected_mana[1], name
+    assert seen == set(BARS) | {"flash"}
+
+
+def test_bars_are_not_read_off_the_map():
+    """阵亡时那里是地图：花花绿绿的地面不能被当成血条。"""
+    rng = np.random.default_rng(1)
+    for _ in range(50):
+        block = rng.integers(0, 256, (3, 76, 3), dtype=np.uint8)
+        gap = rng.integers(40, 256, (2, 76, 3), dtype=np.uint8)
+        assert hp_bar(block, gap) is None
 
 
 # ---- 去抖、校验、时钟 ----
@@ -709,6 +759,72 @@ def test_ult_progress_is_reported_in_steps():
     assert run([0.0, 0.0], 2.0) == [0.0]                                            # 用掉了
     climbing = run([round(i * 0.004, 3) for i in range(250)], 3.0)                  # 50 秒转回来
     assert climbing[-1] == 1.0 and 8 <= len(climbing) <= 14 and climbing == sorted(climbing)
+
+
+def bar_run(tracker, reads, start=0.0, step=0.1):
+    """reads: 每 step 秒一份 {"blue.0": (血量, 护盾, 资源, 颜色)}。返回 [(时间, {"blue.0": {...}})]：每次发出的血条。"""
+    out = []
+    for i, bars in enumerate(reads):
+        now = start + i * step
+        values = {f"{player}.bars": value for player, value in bars.items()}
+        sent = {key[:-len(".bars")]: value for key, value in set_values(tracker.update(reading(clock=600, **{}) | {"values": values}, now)).items()
+                if key.endswith(".bars")}
+        if sent:
+            out.append((round(now, 2), sent))
+    return out
+
+
+def test_bars_need_two_steady_reads_and_a_real_change():
+    tracker = Tracker()
+    sent = bar_run(tracker, [{"blue.0": (0.80, 0.0, 0.5, "mana")}] * 8)
+    assert sent[0] == (0.1, {"blue.0": {"hp": 0.8, "shield": 0.0, "mana": 0.5, "resource": None}})      # 第二次读到才报
+    assert [(at, bars["blue.0"]["resource"]) for at, bars in sent] == [(0.1, None), (0.5, "mana")]  # 颜色连续 5 次一样才认
+    assert bar_run(tracker, [{"blue.0": (0.81, 0.0, 0.51, "mana")}] * 5, start=0.8) == []            # 差 1% 不报
+    # 一下子掉了一大截：掉的那一帧和前一帧对不上，等下一帧读稳了再报
+    sent = bar_run(tracker, [{"blue.0": (0.30, 0.0, 0.5, "mana")}] * 3, start=1.3)
+    assert [(at, bars["blue.0"]["hp"]) for at, bars in sent] == [(1.4, 0.3)]
+    assert bar_run(tracker, [{"blue.0": (1.0, 0.0, 1.0, "mana")}, {"blue.0": (0.5, 0.0, 1.0, "mana")}] * 4, start=1.6) == []  # 一直在跳：不报
+
+
+def test_bars_are_sent_at_most_five_times_a_second():
+    tracker = Tracker()
+    players = [f"{side}.{index}" for side in ("blue", "red") for index in range(5)]
+    reads = []
+    for i in range(40):                                     # 打团：十个人的血每帧都在掉，四秒
+        hp = round(1.0 - i * 0.02, 2)
+        reads.append({player: (hp, 0.0, 0.5, "mana") for player in players})
+    sent = bar_run(tracker, reads)
+    assert 12 <= len(sent) <= 4 / BAR_EVERY + 1
+    assert all(later - earlier >= BAR_EVERY - 1e-9 for (earlier, _), (later, _) in zip(sent, sent[1:]))
+    assert all(len(bars) == 10 for _, bars in sent)         # 十个人一起报
+    assert sent[-1][1]["red.4"]["hp"] == pytest.approx(0.24, abs=0.03)
+
+
+def test_bars_reach_the_panel_and_come_back_after_a_reset(store):
+    tracker = Tracker()
+    for i in range(3 + BAR_KIND_CONFIRM):
+        for command in tracker.update({"clock": 600, "panel": True, "values": {"red.2.bars": (0.45, 0.1, 0.0, "energy")}}, i * 0.3):
+            store.apply(command, int(i * 300))
+    assert store.game["players"]["red"][2]["bars"] == {"hp": 0.45, "shield": 0.1, "mana": 0.0, "resource": "energy"}
+    store.apply({"type": "game.new"}, 5000)
+    assert store.game["players"]["red"][2]["bars"] is None
+    for command in tracker.reconcile(store.snapshot(5000), 5.0):
+        store.apply(command, 5000)
+    assert store.game["players"]["red"][2]["bars"]["hp"] == 0.45
+    assert not collect(tracker.reconcile(store.snapshot(5000), 6.0), "game.set")           # 对上了就不再补
+
+
+def test_bars_field_and_log(store):
+    from state import CommandError
+    from vision.__main__ import describe
+    with pytest.raises(CommandError):
+        store.apply({"type": "game.set", "path": "blue.0.bars", "value": [0.5, 0.0]}, 0)
+    store.apply({"type": "game.set", "path": "blue.0.bars", "value": {"hp": 1.4, "shield": -1, "resource": "mana"}}, 0)
+    assert store.game["players"]["blue"][0]["bars"] == {"hp": 1.0, "shield": 0.0, "mana": 0.0, "resource": "mana"}
+    # 血条一秒报好几次，识别服务的日志里不打印；和别的数一起报时只打印别的
+    bars = {"hp": 0.5, "shield": 0.0, "mana": 0.2, "resource": "mana"}
+    assert describe({"type": "game.set", "values": {"blue.0.bars": bars}}) == ""
+    assert describe({"type": "game.set", "values": {"blue.0.bars": bars, "blue.0.gold": 900}}) == "blue.0.gold=900"
 
 
 # ---- 冷却读条 ----

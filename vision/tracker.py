@@ -22,6 +22,8 @@
     数字认不出来时，同一方不久前刚报过 N 连破就当作 N+1（二、三连破之后 15 秒内，四连破之后 30 秒内）。
     是谁：这一方刚涨了人头的那名选手（人头和播报差不多同时出现，前后等几秒）；原生面板收起时读不到人头，
     不等，报“不知道是谁”。
+  · 血条：前后两次读数差不多才算读稳；和报过的差 2% 以上才报，最多每秒 5 次（十个人一起报）。
+    资源条的颜色（蓝 / 黄）连续 5 次一样才换。阵亡时读不到，不报；面板上阵亡的人血条按空的画。
   · 冷却：召唤师技能和装备的图标由亮转暗的那一刻算“用掉了”，从那一刻起按 config/cooldowns.yaml 的时长读条，
     读满为止。原生图标在冷却中是一圈圈慢慢亮回来的，不能拿“亮回来了”当结束（那样最后两三成的时间读条就没了）；
     只有图标已经完全亮了好一会儿、而读条还剩不少的时候（技能急速让冷却变短了，或者那一下其实不是用掉），才提前结束。
@@ -76,6 +78,11 @@ READY = 0.97                    # 冷却中图标从 0.25 左右匀速亮回到 
 READY_SECONDS = 1.5             # 而且要保持这么久
 EARLY_SHARE = 0.15              # 读条还剩超过这么多（占总时长）时，原生已经转好，才提前结束；最后这一段一律读满
 LIGHT_FLOOR = 60                # 最亮时也不到这个数的格子不判断（还没见过它亮的样子）
+BAR_STEADY = 0.04               # 血条前后两次读数每一项都差不到这么多才算读稳了（掉血的那一下，前后两帧能差一大截）
+BAR_STEP = 0.02                 # 血量、护盾、资源变化这么多才报
+BAR_EVERY = 0.18                # 血条最多每这么多秒报一次（每秒读 5 次时就是每帧；读得更快也不会多于每秒 5 次）
+BAR_GAP = 0.5                   # 两次读数相隔超过这么久（中间阵亡了、血条被挡住），上一次的不算数
+BAR_KIND_CONFIRM = 5            # 资源条的颜色要连续这么多次一样才换（开局前一分多钟有的英雄是黄条，之后才变蓝）
 
 
 class Lamp:
@@ -154,6 +161,10 @@ class Tracker:
         self.clock_candidate: tuple[int, float] | None = None    # 一次还没确认的跳变：(游戏秒, 读到的时间)
         self.clock_read_at = float("-inf")
         self.anchor: tuple[float, float, bool] | None = None    # 上次对表：(游戏秒, 时间, 是否在走)
+        self.bar_raw: dict[str, tuple[tuple, float]] = {}       # "blue.0" → 上一次的血条读数和读到的时间
+        self.bars: dict[str, dict] = {}                         # "blue.0" → 已经报过的 {"hp", "shield", "mana", "resource"}
+        self.bar_pending: dict[str, dict] = {}                  # 读稳了、和报过的不一样、还没报的
+        self.bars_at = float("-inf")
         self.heartbeat_at = float("-inf")
         self.rejected = 0           # 被校验挡掉的读数个数，给日志看
 
@@ -352,6 +363,38 @@ class Tracker:
                 early = value == 0 and slot.known and slot.value > REVIVE_NATURAL
                 if slot.offer(value, REVIVE_CONFIRM if early else 2):
                     out[path] = value or None                   # 状态中心里“活着”是 None
+
+    # ---- 血条 ----
+
+    def _bars(self, readings: dict, now: float, out: dict) -> None:
+        """选手卡片上的血条、护盾、资源条。readings 里是 "blue.0.bars": (血量, 护盾, 资源, 资源条颜色)。"""
+        for path, reading in readings.items():
+            if not path.endswith(".bars"):
+                continue
+            player = path[:-len(".bars")]
+            previous, self.bar_raw[player] = self.bar_raw.get(player), (reading, now)
+            if previous is None or now - previous[1] > BAR_GAP or any(
+                    abs(one - other) > BAR_STEADY for one, other in zip(reading[:3], previous[0][:3])):
+                continue
+            hp, shield, mana, kind = reading
+            slot = self._slot(f"{player}.resource")
+            if kind is not None:                        # 资源条空了的时候看不出颜色，沿用之前的
+                slot.offer(kind, BAR_KIND_CONFIRM)
+            bars = {"hp": round(hp, 2), "shield": round(shield, 2), "mana": round(mana, 2),
+                    "resource": slot.value if slot.known else None}
+            sent = self.bars.get(player)
+            if sent is None or sent["resource"] != bars["resource"] or any(
+                    abs(bars[key] - sent[key]) >= BAR_STEP or (bars[key] in (0.0, 1.0) and bars[key] != sent[key])
+                    for key in ("hp", "shield", "mana")):
+                self.bar_pending[player] = bars
+            else:
+                self.bar_pending.pop(player, None)
+        if self.bar_pending and now - self.bars_at >= BAR_EVERY:
+            for player, bars in self.bar_pending.items():
+                self.bars[player] = bars
+                out[f"{player}.bars"] = dict(bars)
+            self.bar_pending.clear()
+            self.bars_at = now
 
     # ---- 多杀播报 ----
 
@@ -596,6 +639,9 @@ class Tracker:
                 path, running = f"{side}.{index}.cooldowns", self.cooldowns.get(f"{side}.{index}")
                 if running is not None and path not in locks and player["cooldowns"] != running:
                     values[path] = dict(running)
+                path, bars = f"{side}.{index}.bars", self.bars.get(f"{side}.{index}")
+                if bars is not None and path not in locks and player["bars"] != bars:
+                    values[path] = dict(bars)
         commands = [{"type": "game.set", "source": "vision", "values": values}] if values else []
         if "objectives" not in locks:
             # 顶部条上挂着的元素龙是确凿的状态，状态中心里没有就补上。牌子报的击杀是一次性的，不补：
@@ -620,6 +666,7 @@ class Tracker:
         commands = self._clock(reading["clock"], now)
         values = self._values(reading, now)
         self._extras(reading, values)
+        self._bars(reading["values"], now, values)
         was_hidden = self.panel.value is False
         panel_changed = self.panel.offer(bool(reading["panel"])) is not None
         if panel_changed and self.panel.value and was_hidden:

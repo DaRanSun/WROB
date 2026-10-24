@@ -36,27 +36,33 @@
 
 /* 双设备：画布 1920×1080，面板一点都不压画面。
      顶部一条 0–90：战队面板整体缩到 0.652（第一行 92 → 60，第二行 46 → 30），居中宽 1200；buff 牌子在第二行的两端。
-     中间 90–870：1920×780 的空白，OBS 里放观战机的纯净画面（32:13，模拟器设成 2560×1040 或 1920×780）。
-     底部一条 870–1080：对位面板一行 56 → 42（缩到 0.75），居中宽 1620，两侧各留 150 的空白（以后放多杀、连杀、
-     数据对比、打龙的特效）。选手名、KDA、经济排成一行、字放大：名字最长 7 个字，KDA 和经济各占固定宽度，五行上下对齐。
+     中间 90–840：1920×750 的空白，OBS 里放观战机的纯净画面（64:25，模拟器设成 2560×1000 或 1920×750）。
+     底部一条 840–1080：对位面板一行 64 → 48（缩到 0.75），居中宽 1620，两侧各留 150 的空白（以后放多杀、连杀、
+     数据对比、打龙的特效）。每行上面是选手名、KDA、经济（字放大：名字最长 7 个字，KDA 和经济各占固定宽度，五行上下对齐），
+     下面是横跨这三栏的血条和资源条（照端游 LPL 的样子）。
      两条面板两侧空出来的地方由 .band 用同样的底色补满。 */
 .stage[data-mode="dual"] {
     --topbar-width: 1840px;             /* × 0.652 = 1200 */
     --topbar-scale: 0.652;
     --matchups-width: 2160px;           /* × 0.75 = 1620 */
     --matchups-scale: 0.75;
+    --row-height: 64px;                 /* × 0.75 = 48，五行 240 */
     --lane-name: 224px;                 /* 7 个汉字 */
     --lane-kda: 140px;
     --lane-gold: 118px;
 }
 .stage[data-mode="dual"] .lane-side { gap: 9px; }
+.stage[data-mode="dual"] .lane-portrait { width: 56px; height: 56px; }     /* 行高了，头像跟着大一点（一侧正好还剩 10 的余量） */
 .stage[data-mode="dual"] .lane-text {
     flex: none;
     grid-template-columns: var(--lane-name) var(--lane-kda) var(--lane-gold);
-    grid-template-rows: 1fr;
+    grid-template-rows: 36px 19px;      /* 上面一行字，下面血条 11 + 缝 3 + 资源条 5 */
+    row-gap: 4px;
+    align-content: center;
     column-gap: 14px;
     padding: 0 12px 0 4px;
 }
+.stage[data-mode="dual"] .lane-text > span { line-height: 36px; }
 .stage[data-mode="dual"] .lane-side.red .lane-text {
     grid-template-columns: var(--lane-gold) var(--lane-kda) var(--lane-name);
     padding: 0 4px 0 12px;
@@ -72,7 +78,7 @@
 .band { display: none; }
 .stage[data-mode="dual"] .band { display: block; position: absolute; left: 0; right: 0; background: var(--surface); }
 .stage[data-mode="dual"] .band-top { top: 0; height: 90px; border-bottom: 1px solid var(--hairline); }
-.stage[data-mode="dual"] .band-bottom { bottom: 0; height: 210px; border-top: 1px solid var(--hairline); }
+.stage[data-mode="dual"] .band-bottom { bottom: 0; height: 240px; border-top: 1px solid var(--hairline); }
 .stage[data-mode="dual"] .topbar { filter: none; clip-path: inset(0); }     /* 龙魂的光晕也不许溢到画面上 */
 .stage[data-mode="dual"] .matchups { box-shadow: none; }
 .stage[data-mode="dual"] .timers {
@@ -387,6 +393,24 @@
 .lane-side.red .lane-name { grid-column: 2; text-align: right; }
 .lane-side.red .lane-gold, .lane-side.red .lane-kda { grid-column: 1; text-align: left; }
 
+/* 血条和资源条：只在双设备显示，在选手名、KDA、经济下面横跨这三栏。红方整条镜像，两边都从头像那一侧往中间填 */
+.lane-bars { display: none; }
+.stage[data-mode="dual"] .lane-bars { grid-row: 2; grid-column: 1 / -1; display: flex; flex-direction: column; gap: 3px; }
+.stage[data-mode="dual"] .lane-side.red .lane-bars { transform: scaleX(-1); }
+.lane-bars.is-unknown, .tf-bars.is-unknown { visibility: hidden; }     /* 识别没在跑、还没读到：不画，免得看着像所有人都没血 */
+.bar-hp, .bar-res { position: relative; display: block; overflow: hidden; background: rgba(255, 255, 255, 0.07); }
+.bar-hp { height: 11px; }
+.bar-res { height: 5px; }
+.bar-hp i, .bar-res i { position: absolute; top: 0; bottom: 0; left: 0; width: 0; }
+.bar-fill { background: linear-gradient(180deg, #86e070, #3faa47); transition: width 0.2s linear; }
+.bar-lag { background: #efe4bf; transition: width 0.5s ease-in 0.45s; }      /* 掉了的那一截：停一下再追上去 */
+.bar-shield { background: #e4e8ee; transition: left 0.2s linear, width 0.2s linear; }
+.bar-res .bar-fill { background: #3d8fe8; }
+.bar-res[data-kind="energy"] .bar-fill { background: #f0c541; }
+.bar-res[data-kind="other"] .bar-fill { background: #d5d9e1; }
+.bar-res[data-kind=""] { visibility: hidden; }        /* 没有资源条的英雄（锐雯） */
+.lane-side.is-dead .lane-bars { opacity: 0.45; }
+
 /* 对位经济差：数字居中，领先的那一侧亮一条边、出一个箭头 */
 .lane-mid {
     position: relative;
@@ -412,3 +436,146 @@
 .lane-mid::before { left: 0; background: var(--blue); clip-path: polygon(100% 0, 100% 100%, 0 50%); width: 16px; }
 .lane-mid::after { right: 0; background: var(--red); clip-path: polygon(0 0, 0 100%, 100% 50%); width: 16px; }
 .lane-mid[data-lead="blue"]::before, .lane-mid[data-lead="red"]::after { opacity: 1; }
+
+/* ================= 底部：团战 UI（只用于双设备） =================
+   导播切入时顶替对位面板（快捷键 T），位置和它一样：底部那条 840–1080 里居中，宽 1620，两侧各留的 150 照旧。
+   照端游观赛的团战界面，十个人一人一栏（每栏 156 宽，两边都是上野中下辅从左往右），从上到下：
+     召唤师技能 · 大招 · 召唤师技能（46 高），关键装备（两行 30 的格子，最多 6 件），头像（68），
+     等级 + 血条和资源条（28；血条 14 高，比对位面板里的粗，打团时要看得清）。
+   中间 60 宽一条：赛事标识，没有就写 VS。按画布像素直接排，不整体缩放。 */
+
+.teamfight { display: none; }
+.stage[data-mode="dual"] .teamfight {
+    position: absolute;
+    bottom: 0;
+    left: var(--main-center);
+    width: 1620px;
+    height: 240px;
+    display: grid;
+    grid-template-columns: 1fr 60px 1fr;
+    background: var(--surface);
+    opacity: 0;
+    transform: translateX(-50%) translateY(60px);
+    pointer-events: none;
+    transition: opacity 0.35s, transform 0.35s;
+}
+.stage[data-mode="dual"] .teamfight.is-shown { opacity: 1; transform: translateX(-50%); }
+
+.tf-half { --side: var(--blue); display: grid; grid-template-columns: repeat(5, 1fr); box-shadow: inset 0 3px 0 var(--side); }
+.tf-half.red { --side: var(--red); }
+
+.tf-center { display: flex; align-items: center; justify-content: center; background: var(--surface-2); }
+.tf-center .logo { width: 46px; height: 46px; }
+.tf-center .logo.is-empty { display: none; }
+.tf-center b { font-family: var(--font-num); font-size: 26px; letter-spacing: 1px; color: var(--text-dim); }
+.tf-center .logo:not(.is-empty) + b { display: none; }
+
+.tf-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 6px 5px 2px;
+}
+.tf-col + .tf-col { border-left: 1px solid var(--hairline); }
+
+/* 第一行：两个召唤师技能夹着大招 */
+.tf-skills { display: flex; align-items: center; gap: 10px; height: 46px; }
+.tf-spell {
+    position: relative;
+    flex: none;
+    width: 34px;
+    height: 34px;
+    overflow: hidden;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.06);
+}
+.tf-spell img, .tf-item img { width: 100%; height: 100%; display: block; }
+.tf-spell .cd { font-size: 19px; }
+.lane-ult.tf-ult { width: 46px; height: 46px; }
+.lane-ult.tf-ult[hidden] { visibility: visible; box-shadow: inset 0 0 0 1px var(--hairline); }    /* 五级前：一个空的暗圈占着位置 */
+.lane-ult.tf-ult[hidden] > * { visibility: hidden; }
+.lane-ult.tf-ult.no-icon::before { font-size: 26px; }
+
+/* 第二块：关键装备，每行最多 3 件、最多两行（辅助、坦克后期常有五六件），图标不缩小；4 件排成 2 + 2。
+   不管几件都占两行的高度，十个人的头像才对得齐 */
+.tf-items {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: center;
+    justify-content: center;
+    gap: 4px;
+    width: 98px;
+    height: 64px;
+}
+.tf-items[data-count="4"] { width: 64px; }
+.tf-item { position: relative; flex: none; width: 30px; height: 30px; overflow: hidden; border-radius: 50%; }
+.tf-item[hidden] { display: none; }
+.tf-item .cd { font-size: 17px; }
+
+.tf-portrait { position: relative; flex: none; width: 68px; height: 68px; overflow: hidden; background: rgba(255, 255, 255, 0.06); }
+.tf-portrait::after { content: ""; position: absolute; inset: 0; z-index: 2; box-shadow: inset 0 0 0 2px var(--side); pointer-events: none; }
+.tf-face { display: block; width: 100%; height: 100%; }
+.tf-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tf-respawn {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-num);
+    font-size: 42px;
+    font-weight: 700;
+    color: #ff5a67;
+    text-shadow: 0 0 6px #000, 0 0 2px #000;
+    opacity: 0;
+}
+.tf-col.is-dead .tf-face img { filter: grayscale(1) brightness(0.5); }
+.tf-col.is-dead .tf-respawn { opacity: 1; }
+.tf-col.is-dead .tf-portrait::after { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.25); }
+
+/* 最下面：等级在左，血条和资源条在右（都从左往右填） */
+.tf-status { display: flex; align-items: center; gap: 6px; width: 140px; height: 28px; }
+.tf-level { flex: none; min-width: 30px; font-size: 28px; font-weight: 700; line-height: 1; text-align: center; color: #fff; }
+.tf-bars { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.tf-bars .bar-hp { height: 14px; }
+.tf-bars .bar-res { height: 7px; }
+.tf-col.is-dead .tf-bars, .tf-col.is-dead .tf-level { opacity: 0.45; }
+
+/* ================= 底部两侧：装备价值（只用于双设备） =================
+   对位面板 / 团战 UI 左右各留出 150 宽（底部那条 840–1080），左边蓝方、右边红方，从外侧滑进来。
+   上面是“装备价值 / LOADOUT”，中间是价值总和（金色），下面是占双方总和的百分比和一条按百分比填的条；占多的一方百分比用队伍色。 */
+
+.loadout { display: none; }
+.stage[data-mode="dual"] .loadout { display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 240px; pointer-events: none; }
+.lv-side {
+    --side: var(--blue);
+    position: absolute;
+    bottom: 0;
+    width: 150px;
+    height: 240px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--side) 24%, var(--surface)), var(--surface) 80%);
+    box-shadow: inset 0 3px 0 var(--side);
+    opacity: 0;
+    transition: opacity 0.35s, transform 0.35s;
+}
+.lv-side.blue { left: 0; transform: translateX(-40px); }
+.lv-side.red { --side: var(--red); right: 0; transform: translateX(40px); }
+.loadout.is-shown .lv-side { opacity: 1; transform: none; }
+.lv-label { font-size: 19px; font-weight: 600; letter-spacing: 2px; color: #e7ebf2; }
+.lv-sub { margin-top: -2px; font-family: var(--font-num); font-size: 13px; letter-spacing: 3px; color: var(--text-dim); }
+.lv-value { margin-top: 10px; font-size: 42px; font-weight: 700; line-height: 1; color: var(--coin); }
+.lv-share { margin-top: 6px; font-size: 32px; font-weight: 700; line-height: 1; color: #fff; }
+.lv-side.is-ahead .lv-share { color: color-mix(in srgb, var(--side) 70%, #fff); }
+.lv-bar { position: relative; display: block; width: 112px; height: 8px; margin-top: 4px; overflow: hidden; background: rgba(255, 255, 255, 0.1); }
+.lv-bar i { position: absolute; top: 0; bottom: 0; left: 0; width: 50%; background: var(--side); transition: width 0.4s; }
+.lv-side.red .lv-bar i { left: auto; right: 0; }          /* 红方从外侧（右边）往里填，和蓝方对称 */

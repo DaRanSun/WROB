@@ -33,7 +33,7 @@ TARGET = ROOT / "vision" / "templates" / "items-variants.npz"
 def known_items() -> list[str]:
     config = yaml.safe_load((ROOT / "config" / "items.yaml").read_text(encoding="utf-8"))
     excluded = set(config.get("exclude") or [])
-    return [name for name in config["items"] if name not in excluded]
+    return [name for name in list(config["items"]) + list(config.get("extra") or {}) if name not in excluded]
 
 
 def build(_args=None) -> None:

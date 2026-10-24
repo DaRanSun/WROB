@@ -110,6 +110,16 @@
 
     // ---- 底部：对位面板 ----
 
+    // 血条和资源条（对位面板、团战 UI 都有）：血条里叠着掉血时停一下的浅色一截、实际血量、护盾
+    function makeBars(className) {
+        const bars = { root: element('div', className), hp: element('span', 'bar-hp'), res: element('span', 'bar-res') };
+        ['lag', 'fill', 'shield'].forEach(part => { bars[part] = bars.hp.appendChild(element('i', 'bar-' + part)); });
+        bars.mana = bars.res.appendChild(element('i', 'bar-fill'));
+        bars.root.append(bars.hp, bars.res);
+        return bars;
+    }
+
+    const ultSlots = [];                // 对位面板和团战 UI 里所有的大招图标，每帧往识别给的进度靠
     const laneRows = WROB.roles.map(() => {
         const row = element('div', 'lane-row');
         const parts = {};
@@ -121,6 +131,7 @@
             const ult = element('span', 'lane-ult');
             ult.append(new Image(), element('i', 'lane-ult-shade'));
             ult.hidden = true;
+            ultSlots.push(ult);
             const spellBox = element('div', 'lane-spells');
             const spells = [0, 1].map(() => spellBox.appendChild(element('span', 'lane-spell')));
             const portrait = element('div', 'lane-portrait');
@@ -132,9 +143,10 @@
             const name = element('span', 'lane-name');
             const gold = element('span', 'lane-gold num');
             const kda = element('span', 'lane-kda num');
-            text.append(name, gold, kda);
+            const bars = makeBars('lane-bars');
+            text.append(name, gold, kda, bars.root);
             box.append(items, rune, ult, spellBox, portrait, text);     // 从外到内；红方由 CSS 镜像
-            parts[side] = { box, slots, rune, ult, spells, portrait, face, respawn, level, name, gold, kda };
+            parts[side] = { box, slots, rune, ult, spells, portrait, face, respawn, level, name, gold, kda, bars };
         });
         parts.mid = element('div', 'lane-mid num');
         row.append(parts.blue.box, parts.mid, parts.red.box);
@@ -172,29 +184,55 @@
         slot.classList.toggle('is-ready', slot.target >= 1);
     }
     function runUlts() {
-        laneRows.forEach(parts => SIDES.forEach(side => {
-            const slot = parts[side].ult;
+        ultSlots.forEach(slot => {
             if (slot.hidden || slot.shown == null) return;
             // 用掉的那一下直接变暗；往回转的时候慢慢追
             slot.shown = slot.target < slot.shown ? slot.target : Math.min(slot.target, slot.shown + 0.004);
             slot.style.setProperty('--done', slot.shown.toFixed(3));
-        }));
+        });
     }
 
     // 冷却：识别服务给的是 {"spell.0": [开始, 结束], "item.3": [开始, null]}（游戏秒）。
     // 没到结束时间的压暗并倒数；结束时间是 null 的（惩戒、不知道冷却多久的）只压暗。
+    function paintCooling(slot, span, t) {
+        const cooling = Boolean(span) && slot.firstChild != null && (span[1] == null || t < span[1]);
+        slot.classList.toggle('is-cooling', cooling);
+        const label = slot.querySelector('.cd');
+        if (label) setText(label, cooling && span[1] != null ? String(Math.ceil(span[1] - t)) : '');
+    }
     function paintCooldowns(game, t) {
         laneRows.forEach((parts, index) => SIDES.forEach(side => {
             const running = game.players[side][index].cooldowns || {};
             const cell = parts[side];
-            [['spell', cell.spells], ['item', cell.slots]].forEach(([kind, slots]) => slots.forEach((slot, number) => {
-                const span = running[kind + '.' + number];
-                const cooling = Boolean(span) && slot.firstChild != null && (span[1] == null || t < span[1]);
-                slot.classList.toggle('is-cooling', cooling);
-                const label = slot.querySelector('.cd');
-                if (label) setText(label, cooling && span[1] != null ? String(Math.ceil(span[1] - t)) : '');
-            }));
+            cell.spells.forEach((slot, number) => paintCooling(slot, running['spell.' + number], t));
+            cell.slots.forEach((slot, number) => paintCooling(slot, running['item.' + number], t));
+            if (!fightOn) return;
+            const col = fightCols[side][index];         // 团战 UI 的装备格记着它在装备栏里是第几格
+            col.spells.forEach((slot, number) => paintCooling(slot, running['spell.' + number], t));
+            col.items.forEach(slot => paintCooling(slot, slot.hidden ? null : running['item.' + slot.dataset.slot], t));
         }));
+    }
+
+    // 血条和资源条（只在双设备显示）：识别给的是占整条的比例。阵亡的按空的画；识别没在跑、还没读到的不画。
+    // 掉血时浅色的那一截（bar-lag）停一下再追上去，和游戏里一样；回血时它在血条下面，看不见。
+    const percent = value => (Math.max(0, Math.min(1, value)) * 100).toFixed(1) + '%';
+    function paintBars(view, player) {
+        const bars = player.bars;
+        view.root.classList.toggle('is-unknown', !bars);
+        if (!bars) return;
+        const hp = player.alive ? bars.hp : 0;
+        view.fill.style.width = view.lag.style.width = percent(hp);
+        view.shield.style.left = percent(hp);
+        view.shield.style.width = percent(player.alive ? Math.min(bars.shield, 1 - hp) : 0);
+        view.res.dataset.kind = bars.resource || '';
+        view.mana.style.width = percent(player.alive ? bars.mana : 0);
+    }
+
+    function paintFace(node, champion) {
+        if (node.dataset.champion === (champion || '')) return;
+        node.dataset.champion = champion || '';
+        node.replaceChildren();
+        if (champion) node.append(WROB.champions.icon(champion));
     }
 
     function paintLanes(game) {
@@ -203,11 +241,7 @@
                 const player = game.players[side][index];
                 const cell = parts[side];
                 setText(cell.name, player.name || WROB.roleNames[player.role]);
-                if (cell.face.dataset.champion !== (player.champion || '')) {
-                    cell.face.dataset.champion = player.champion || '';
-                    cell.face.replaceChildren();
-                    if (player.champion) cell.face.append(WROB.champions.icon(player.champion));
-                }
+                paintFace(cell.face, player.champion);
                 setText(cell.kda, player.kills + '/' + player.deaths + '/' + player.assists);
                 tween(cell.gold, player.gold, exact);
                 (player.items || []).forEach((name, slot) => { if (cell.slots[slot]) paintIcon(cell.slots[slot], 'items', name); });
@@ -215,12 +249,91 @@
                 paintIcon(cell.rune, 'runes', player.rune);
                 setText(cell.level, player.level ? String(player.level) : '');
                 paintUlt(cell.ult, player);
+                paintBars(cell.bars, player);
                 cell.box.classList.toggle('is-dead', !player.alive);
                 setText(cell.respawn, !player.alive && player.respawn ? String(player.respawn) : '');
             });
             const lane = game.lanes[index];
             tween(parts.mid, lane.diff == null ? null : Math.abs(lane.diff), compact);
             parts.mid.dataset.lead = lane.lead || '';
+        });
+    }
+
+    // ---- 底部：团战 UI（只用于双设备）。导播切入时顶替对位面板，照端游观赛的团战界面：十个人一人一栏，
+    //      从上到下是 召唤师技能 · 大招 · 召唤师技能、关键装备、头像、等级和血条资源条。名字、经济、KDA 打团时不看，不放 ----
+
+    const fight = document.getElementById('teamfight');
+    const fightLogo = fight.querySelector('.tf-center .logo');
+    let fightOn = false;
+    let keyItems = new Set();           // 关键装备：会读冷却条的那些，去掉卢登（config/cooldowns.yaml）
+    const fightCols = {};
+    SIDES.forEach(side => {
+        const half = fight.querySelector('.tf-half.' + side);
+        fightCols[side] = WROB.roles.map(() => {
+            const box = element('div', 'tf-col');
+            const spells = [0, 1].map(() => element('span', 'tf-spell'));
+            const ult = element('span', 'lane-ult tf-ult');
+            ult.append(new Image(), element('i', 'lane-ult-shade'));
+            ult.hidden = true;
+            ultSlots.push(ult);
+            const skills = element('div', 'tf-skills');
+            skills.append(spells[0], ult, spells[1]);
+            const itemBox = element('div', 'tf-items');
+            const items = Array.from({ length: ITEM_SLOTS }, () => itemBox.appendChild(element('span', 'tf-item')));
+            const portrait = element('div', 'tf-portrait');
+            const face = element('span', 'tf-face');
+            const respawn = element('span', 'tf-respawn');
+            portrait.append(face, respawn);
+            const level = element('b', 'tf-level num');
+            const bars = makeBars('tf-bars');
+            const status = element('div', 'tf-status');
+            status.append(level, bars.root);
+            box.append(skills, itemBox, portrait, status);
+            half.append(box);
+            return { box, spells, ult, itemBox, items, portrait, face, respawn, level, bars };
+        });
+    });
+
+    function paintFight(game) {
+        SIDES.forEach(side => fightCols[side].forEach((col, index) => {
+            const player = game.players[side][index];
+            paintFace(col.face, player.champion);
+            (player.spells || []).forEach((name, slot) => { if (col.spells[slot]) paintIcon(col.spells[slot], 'spells', name); });
+            // 关键装备按装备栏的顺序排（鞋子在最外）；格子记着自己是装备栏的第几格，冷却按那一格查
+            const owned = (player.items || []).map((name, slot) => [slot, name]).filter(([, name]) => keyItems.has(name));
+            col.itemBox.dataset.count = owned.length;
+            col.items.forEach((node, k) => {
+                const [slot, name] = owned[k] || [];
+                node.hidden = name == null;
+                node.dataset.slot = slot == null ? '' : String(slot);
+                paintIcon(node, 'items', name);
+            });
+            paintUlt(col.ult, player);
+            setText(col.level, player.level ? String(player.level) : '');
+            paintBars(col.bars, player);
+            col.box.classList.toggle('is-dead', !player.alive);
+            setText(col.respawn, !player.alive && player.respawn ? String(player.respawn) : '');
+        }));
+    }
+
+    // ---- 底部两侧：装备价值（只用于双设备）。导播按 L 显示 / 收起；团战 UI 开着时自动显示。数由状态中心算好（game.loadout） ----
+
+    const loadoutBox = document.getElementById('loadout');
+    const loadoutSides = {};
+    SIDES.forEach(side => {
+        const root = loadoutBox.querySelector('.lv-side.' + side);
+        loadoutSides[side] = { root, value: root.querySelector('.lv-value'), share: root.querySelector('.lv-share'), bar: root.querySelector('.lv-bar i') };
+    });
+
+    function paintLoadout(game, ui) {
+        loadoutBox.classList.toggle('is-shown', ui.mode === 'dual' && Boolean(ui.loadout || ui.teamfight));
+        SIDES.forEach(side => {
+            const view = game.loadout[side];
+            const parts = loadoutSides[side];
+            tween(parts.value, view.value, compact);
+            setText(parts.share, view.share == null ? '–' : view.share + '%');
+            parts.bar.style.width = (view.share == null ? 50 : view.share) + '%';
+            parts.root.classList.toggle('is-ahead', view.share != null && view.share > 50);
         });
     }
 
@@ -272,8 +385,13 @@
         }
         timers.classList.toggle('is-off', !ui.buffs);
         matchups.hidden = !ui.matchups;
-        matchups.classList.toggle('is-replaced', Boolean(ui.chart));       // 经济曲线插入时让开
+        fightOn = ui.mode === 'dual' && Boolean(ui.teamfight);
+        fight.classList.toggle('is-shown', fightOn);
+        matchups.classList.toggle('is-replaced', Boolean(ui.chart) || fightOn);       // 经济曲线、团战 UI 插入时让开
+        setLogo(fightLogo, series.brandLogo || '');                                     // 团战 UI 中间：赛事标识，没有就写 VS
         paintLanes(game);
+        paintFight(game);
+        paintLoadout(game, ui);
     }
 
     function frame(now) {
@@ -294,10 +412,17 @@
         requestAnimationFrame(frame);
     }
 
-    // 特效层（effects.js）要用的：对位面板每一行、舞台
-    WROB.panel = { stage, matchups, laneRows };
+    // 特效层（effects.js）要用的：舞台；底部现在显示的那块（对位面板或团战 UI），每名选手在里面的那一格和头像
+    WROB.panel = {
+        stage,
+        teamfight: () => fightOn,
+        bottom: () => fightOn ? fight : matchups,
+        cell: (side, index) => fightOn ? fightCols[side][index].box : laneRows[index][side].box,
+        portrait: (side, index) => fightOn ? fightCols[side][index].portrait : laneRows[index][side].portrait,
+    };
 
     WROB.catalog().then(catalog => {
+        keyItems = new Set(catalog.keyItems || []);
         WROB.champions.load(catalog);
         WROB.icons.useImages(catalog.dragonIcons);
         WROB.onState(render);

@@ -7,6 +7,7 @@
   1. 在每张截图里找出两列圆形图标切下来：每张截图先左列从上到下，再右列从上到下；翻页时重复截到的自动去重。
   2. 和 config/items.yaml 里的名字按顺序一一对上（数量对不上就报错，不会悄悄错位）。
   3. 写出 assets/items/<名字>.png（圆形、透明底，面板显示用）和 vision/templates/items.npz（识别用）。
+  config/items.yaml 的 extra 是截图之后才补的装备：每件一张单独的掌盟图标图，接在截图里的那些后面一起切。
 
 游戏里装备栏的格子是 44×44 的方图，掌盟的圆形图标正好是它的内切圆，所以缩到 44 像素就能直接比对。
 """
@@ -67,6 +68,25 @@ def collect(folder: Path) -> list[np.ndarray]:
     return unique
 
 
+def extra_icon(path: Path) -> np.ndarray:
+    """单独给的一张掌盟图标图：白底上最左边那个圆形图标（右边可能带着名字），切成和截图里一样大的方块。"""
+    data = np.fromfile(path, np.uint8) if path.is_file() else np.zeros(0, np.uint8)
+    image = cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None      # 路径里有中文，不走 cv2.imread
+    if image is None:
+        sys.exit(f"{path}：读不出来")
+    dark = image.min(axis=2) < 225
+    spans = [span for span in runs(dark.sum(axis=0) > 6) if span[1] - span[0] > 60]
+    if not spans:
+        sys.exit(f"{path.name}：找不到图标")
+    x0, x1 = spans[0]
+    rows = np.flatnonzero(dark[:, x0:x1].sum(axis=1) > 6)
+    y0, y1 = int(rows[0]), int(rows[-1]) + 1
+    size = max(x1 - x0, y1 - y0)
+    cy, cx = (y0 + y1) // 2, (x0 + x1) // 2
+    icon = image[max(0, cy - size // 2):cy + size // 2, max(0, cx - size // 2):cx + size // 2]
+    return cv2.resize(icon, (ICON, ICON), interpolation=cv2.INTER_AREA)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("screenshots", type=Path, help="放截图的文件夹")
@@ -80,6 +100,10 @@ def main():
     icons = collect(args.screenshots)
     if len(icons) != len(names):
         sys.exit(f"截图里切出 {len(icons)} 个图标，config/items.yaml 里有 {len(names)} 个名字，对不上")
+    extra = config.get("extra") or {}
+    if set(extra) & set(names):
+        sys.exit(f"extra 里的这些名字 items 里已经有了：{sorted(set(extra) & set(names))}")
+    pairs = list(zip(names, icons)) + [(name, extra_icon(ROOT / path)) for name, path in extra.items()]
 
     yy, xx = np.mgrid[:SHOWN, :SHOWN]
     alpha = np.clip((SHOWN / 2 - 1 - np.hypot(yy - SHOWN / 2 + 0.5, xx - SHOWN / 2 + 0.5)) * 255, 0, 255).astype(np.uint8)
@@ -88,7 +112,7 @@ def main():
     for stale in folder.glob("*.png"):
         stale.unlink()
     kept, templates = [], []
-    for name, icon in zip(names, icons):
+    for name, icon in pairs:
         if name in excluded:
             continue
         shown = cv2.resize(icon, (SHOWN, SHOWN), interpolation=cv2.INTER_AREA)

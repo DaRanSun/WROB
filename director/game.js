@@ -247,7 +247,54 @@
         set(side + '.' + index + '.items', items);
     }
 
-    // ---- 特效：经济曲线的插入 / 收起，自动特效的总开关，手动放（预览美术、识别漏了时补上） ----
+    // ---- 底部换成经济曲线 / 团战 UI：按钮和快捷键（E、T）都走这里。两者互相顶替，再切一次回到对位面板 ----
+
+    function toggleChart(byKey) {
+        const on = !state.ui.chart;
+        send({ type: 'ui.set', values: { chart: on } }).then(reply => {
+            if (reply.ok && byKey) toast(on ? '经济曲线：已插入（E）' : '经济曲线：已收起（E）');
+        });
+    }
+
+    function toggleFight(byKey) {
+        if (state.ui.mode !== 'dual') return toast('团战 UI 只用于双设备模式，先在上面的“画面模式”里选双设备', 'error');
+        const on = !state.ui.teamfight;
+        send({ type: 'ui.set', values: { teamfight: on } }).then(reply => {
+            if (reply.ok && byKey) toast(on ? '团战 UI：已切入（T）' : '团战 UI：已切出，回到常规面板（T）');
+        });
+    }
+
+    // 快捷键在哪个页签都能用；光标在文字输入框里（BP 槽位、对表、装备筛选……）时不算，留给打字。
+    // 用按键的物理位置（event.code），中文输入法、大写锁定都不影响。
+    // 装备价值：底部两侧，团战 UI 开着时不管这个开关都显示
+    function toggleLoadout(byKey) {
+        if (state.ui.mode !== 'dual') return toast('装备价值只用于双设备模式，先在上面的“画面模式”里选双设备', 'error');
+        const on = !state.ui.loadout;
+        send({ type: 'ui.set', values: { loadout: on } }).then(reply => {
+            if (reply.ok && byKey) toast(on ? '装备价值：已显示（L）' : '装备价值：已收起（L）' + (state.ui.teamfight ? '。团战 UI 开着时仍然显示' : ''));
+        });
+    }
+
+    const SHORTCUTS = { KeyE: toggleChart, KeyT: toggleFight, KeyL: toggleLoadout };
+    const NOT_TYPING = ['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file'];
+    function typing(target) {
+        if (!(target instanceof Element)) return false;
+        if (target.closest('textarea, [contenteditable]:not([contenteditable="false"])')) return true;
+        return target.tagName === 'INPUT' && !NOT_TYPING.includes(target.type);
+    }
+    function onShortcut(event) {
+        const run = SHORTCUTS[event.code];
+        if (!run || !state || event.repeat || event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+        if (typing(event.target)) return;
+        event.preventDefault();         // 下拉框有焦点时，别让它拿这个字母去跳选项
+        run(true);
+    }
+
+    const keyed = (label, key) => [h('span', { class: 'label' }, label), h('kbd', null, key)];
+    const FIGHT_TIP = '团战 UI 顶替底部的对位面板：只留召唤师技能、大招、关键装备、等级、血条。再点一次切回。只用于双设备。快捷键 T';
+    const LOADOUT_TIP = '底部两侧显示双方身上装备的价值总和和各占的百分比（价值表 config/loadout.yaml）。团战 UI 开着时自动显示。只用于双设备。快捷键 L';
+
+    // ---- 特效：经济曲线、团战 UI 的切换，自动特效的总开关，手动放（预览美术、识别漏了时补上） ----
 
     function buildFx() {
         const select = (options, title) => h('select', { title }, options.map(([value, label]) => h('option', { value }, label)));
@@ -256,13 +303,18 @@
         const element = select(rules.dragon.elements.map(key => [key, ELEMENT_NAMES[key] + '龙']), '元素龙属性');
         const playOne = data => send(Object.assign({ type: 'fx.play' }, data));
         const who = () => ({ side: side.value, index: Number(lane.value) });
-        nodes.chartToggle = button('插入经济曲线', () => send({ type: 'ui.set', values: { chart: !state.ui.chart } }), 'primary',
-            '经济曲线顶替底部的对位面板；再点一次收起，面板回来');
+        nodes.chartToggle = button(keyed('插入经济曲线', 'E'), () => toggleChart(false), 'primary',
+            '经济曲线顶替底部的对位面板；再点一次收起，面板回来。快捷键 E');
+        nodes.fightToggle = button(keyed('切入团战 UI', 'T'), () => toggleFight(false), 'primary', FIGHT_TIP);
+        nodes.loadoutToggle = button(keyed('显示装备价值', 'L'), () => toggleLoadout(false), 'primary', LOADOUT_TIP);
+        nodes.loadoutStatus = h('div', { class: 'dim shortcut-hint' });
         nodes.uiEffects = h('input', { type: 'checkbox', onchange: event => send({ type: 'ui.set', values: { effects: event.target.checked } }) });
         nodes.fx.replaceChildren(
             h('h3', null, '特效 ', h('span', { class: 'dim' }, '连杀、出装、野怪播报会跟着识别自动放；这里可以手动放')),
-            h('div', { class: 'row' }, nodes.chartToggle,
+            h('div', { class: 'row' }, nodes.chartToggle, nodes.fightToggle, nodes.loadoutToggle,
                 h('label', { class: 'check', title: '关掉后只放你在这里手动点的' }, nodes.uiEffects, ' 自动特效')),
+            h('div', { class: 'dim shortcut-hint' }, '快捷键（任何页签，光标不在输入框里时）：E 插入 / 收起经济曲线 · T 切入 / 切出团战 UI · L 显示 / 收起装备价值（团战 UI 开着时自动显示）'),
+            nodes.loadoutStatus,
             h('div', { class: 'row' }, side, lane,
                 ...[2, 3, 4, 5].map(count => button(['', '', '双杀', '三杀', '四杀', '五杀'][count], () => playOne(Object.assign({ kind: 'multikill', count }, who())))),
                 button('出装', () => {
@@ -402,8 +454,23 @@
         if (preview) preview.classList.toggle('phone', state.ui.mode === 'single');     // 双设备的画布是 16:9
         nodes.uiBuffs.checked = state.ui.buffs;
         nodes.uiEffects.checked = state.ui.effects;
-        nodes.chartToggle.textContent = state.ui.chart ? '收起经济曲线' : '插入经济曲线';
+        nodes.chartToggle.querySelector('.label').textContent = state.ui.chart ? '收起经济曲线' : '插入经济曲线';
         nodes.chartToggle.classList.toggle('is-armed', Boolean(state.ui.chart));
+        const dual = state.ui.mode === 'dual';
+        nodes.fightToggle.querySelector('.label').textContent = state.ui.teamfight ? '切出团战 UI' : '切入团战 UI';
+        nodes.fightToggle.classList.toggle('is-armed', Boolean(state.ui.teamfight));
+        nodes.fightToggle.disabled = !dual;
+        nodes.fightToggle.title = dual ? FIGHT_TIP : '团战 UI 只用于双设备模式';
+        nodes.loadoutToggle.querySelector('.label').textContent = state.ui.loadout ? '收起装备价值' : '显示装备价值';
+        nodes.loadoutToggle.classList.toggle('is-armed', Boolean(state.ui.loadout));
+        nodes.loadoutToggle.disabled = !dual;
+        nodes.loadoutToggle.title = dual ? LOADOUT_TIP : '装备价值只用于双设备模式';
+        const worth = SIDES.map(side => {
+            const view = game.loadout[side];
+            return WROB.sideNames[side] + ' ' + view.value.toLocaleString('en-US') + (view.share == null ? '' : '（' + view.share + '%）');
+        });
+        nodes.loadoutStatus.textContent = '装备价值：' + worth.join(' · ')
+            + (!dual ? '' : state.ui.loadout || state.ui.teamfight ? ' · 面板上正在显示' + (state.ui.loadout ? '' : '（团战 UI 自动）') : ' · 面板上没显示');
         nodes.uiMatchups.checked = state.ui.matchups;
         SIDES.forEach(side => {
             const team = teamOn(state, side);
@@ -484,6 +551,7 @@
             buildPicker(catalog.items || []);
             buildFx();
             buildFinish();
+            document.addEventListener('keydown', onShortcut);
             requestAnimationFrame(tick);
         },
         render(next) {
