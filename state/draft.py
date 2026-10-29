@@ -12,6 +12,7 @@
       "lineupSeconds": 0,                    选完之后的阵容调整阶段读几秒；0 = 不读秒（导播手动确认）
       "free": False,
       "blindBans": False,
+      "custom": False,
     }
     slot = {"champion": slug | None, "locked": bool, "role": None | 分路}
 
@@ -31,6 +32,12 @@
 
 自选模式可以带暗禁（format 里写 bans: 3）：选人之前双方同时各禁 bans 个，互相看不见，所以两边可以禁同一个英雄
 （同一方不能禁两次）。双方的禁用位同时开放（这两手标着 both），导播先填哪边都行，共用一次读秒；禁掉的英雄两边都不能选。
+
+自定义模式（format 里写 custom: true）：游戏里没有，拿不到实际 BP、只能观战时用。不禁用、没有顺序、不读秒：
+双方十个选用位放在同一手里同时开放（和暗禁一样标着 both），哪一格先填都行；每一格的分路固定是上野中下辅
+（不用猜、也不能改，填错了一路就拖动交换：英雄换位，分路留在格子上）。十格填满进入阵容阶段，导播核对一遍、
+确认阵容之后才能进入局内（用户 10-26：不跳过确认）。清掉一格退回 running。无畏征召照常。
+识别的自动 BP 不接这个模式（store 里直接丢掉识别发来的 BP 命令）。
 
 读秒（以游戏里的为准，识别会对表）：每一手的 seconds；自选模式是 format 的 ban_seconds（默认 30）、pick_seconds（默认 25）。
 3 Ban 录屏里实测：禁用 30 秒（29→0），选人每轮 25 秒（24→0），连选两手共用（顺序里写成 RR，算一手）；
@@ -52,7 +59,9 @@ FREE_ORDER = "B RR BB RR BB R"          # 自选模式（含 3 Ban）默认的�
 
 def build_turns(fmt: dict) -> tuple[list[dict], dict]:
     """把 config/draft.yaml 里的一个 format 展开成逐手列表，并返回每方各类槽位的数量。"""
-    if fmt.get("free"):                     # 自选模式：（可选的一轮暗禁，）一轮选用
+    if fmt.get("custom"):                   # 自定义：双方十个选用位一起开放（new_draft 里标成 both），不读秒
+        fmt = {"phases": [{"key": "pick", "name": "阵容", "type": "pick", "order": "BBBBB RRRRR", "seconds": 0}]}
+    elif fmt.get("free"):                     # 自选模式：（可选的一轮暗禁，）一轮选用
         bans = int(fmt.get("bans") or 0)
         blind = [{"key": "ban", "name": "禁用", "type": "ban", "order": f"{'B' * bans} {'R' * bans}",
                   "seconds": int(fmt.get("ban_seconds", 30))}]
@@ -102,12 +111,25 @@ def new_draft(key: str, fmt: dict) -> dict:
         "lineupSeconds": int(fmt.get("lineup_seconds", 0)),
         "free": bool(fmt.get("free")),
         "blindBans": bool(fmt.get("free") and fmt.get("bans")),
+        "custom": bool(fmt.get("custom")),
     }
     if draft["blindBans"]:                  # 暗禁：双方的禁用同时进行
         for turn in draft["turns"]:
             if turn["type"] == "ban":
                 turn["both"] = True
+    if draft["custom"]:                     # 自定义：双方十格同时开放，分路就是格子
+        for turn in draft["turns"]:
+            turn["both"] = True
+        _fix_custom_roles(draft)
     return draft
+
+
+def _fix_custom_roles(draft: dict) -> None:
+    """自定义模式：第几格就是哪一路（上野中下辅），交换、清空之后也是。"""
+    if draft.get("custom"):
+        for side in SIDES:
+            for slot, role in zip(draft["slots"][side]["pick"], ROLES):
+                slot["role"] = role
 
 
 # ---- 槽位 ----
@@ -236,6 +258,7 @@ def _timer_stop(draft: dict) -> None:
 
 def _sync(draft: dict, now: int, role_stats: dict) -> None:
     """槽位变化之后重新推导当前手和阶段。"""
+    _fix_custom_roles(draft)
     if draft["status"] == "idle":
         return
     previous = draft["turn"]
@@ -244,7 +267,7 @@ def _sync(draft: dict, now: int, role_stats: dict) -> None:
     if draft["status"] == "running":
         if complete:
             draft["status"] = "lineup"
-            _prefill_roles(draft, role_stats)
+            _prefill_roles(draft, role_stats)       # 自定义模式的分路已经是完整的一套，不动
             _timer_start(draft, draft["lineupSeconds"], now)
         elif draft["turn"] != previous and not _same_window(draft, previous, draft["turn"]):
             _timer_start(draft, draft["turns"][draft["turn"]]["seconds"], now)
@@ -322,6 +345,7 @@ def swap(draft: dict, a: dict, b: dict) -> None:
     get_slot(draft, a), get_slot(draft, b)
     i, j = int(a["index"]), int(b["index"])
     slots[i], slots[j] = slots[j], slots[i]
+    _fix_custom_roles(draft)                # 自定义：英雄换了格子，分路留在格子上
     draft["turn"] = _first_open_turn(draft) if draft["status"] != "idle" else draft["turn"]
 
 
@@ -348,6 +372,8 @@ def _prefill_roles(draft: dict, role_stats: dict) -> None:
 
 def set_role(draft: dict, side: str, index: int, role: str) -> None:
     """指定某个选用位的分路；原来占着这个分路的选用位换成它原先的分路。确认阵容之后也能改。"""
+    if draft.get("custom"):
+        raise CommandError("自定义模式的分路就是格子（上野中下辅）；填错了一路就把两格拖动交换")
     if draft["status"] not in ("lineup", "done"):
         raise CommandError("双方选完之后才能调整分路")
     if role not in ROLES or side not in SIDES:

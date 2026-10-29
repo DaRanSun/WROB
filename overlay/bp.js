@@ -48,7 +48,7 @@
 
     // 槽位数量和分组由 BP 流程决定，流程变了才重建。
     function buildSlots(draft) {
-        const key = draft.format + ':' + draft.turns.length;
+        const key = draft.format + ':' + draft.turns.length + ':' + Boolean(draft.custom);
         if (key === layoutKey) return;
         layoutKey = key;
         SIDES.forEach(side => {
@@ -68,8 +68,10 @@
                 const who = element('div', 'who');
                 who.append(element('span', 'role'), element('span', 'player'));
                 label.append(element('div', 'name'), who);
+                // 空格里的大字：选人顺序（B1、R2……）；自定义模式没有顺序，写这一格的分路
+                const order = draft.custom ? WROB.roleShort[WROB.roles[index]] : (side === 'blue' ? 'B' : 'R') + (index + 1);
                 slot.append(
-                    element('div', 'order', (side === 'blue' ? 'B' : 'R') + (index + 1)),
+                    element('div', 'order', order),
                     element('div', 'art'), element('div', 'shade'),
                     element('div', 'tag', '选择中'), label);
                 return slot;
@@ -148,6 +150,7 @@
     }
 
     function phaseText(draft) {
+        if (draft.custom) return { idle: '即将开始', running: '双方阵容', lineup: '双方阵容', done: '阵容确认' }[draft.status];
         if (draft.status === 'idle') return draft.free && !draft.blindBans ? '即将开始' : 'BP 即将开始';
         if (draft.status === 'lineup') return '阵容调整';
         if (draft.status === 'done') return '阵容确认';
@@ -161,10 +164,12 @@
         buildSlots(draft);
         band.dataset.status = draft.status;
         band.dataset.free = draft.free ? '1' : '';         // 自选模式：不读秒
+        band.dataset.custom = draft.custom ? '1' : '';     // 自定义模式：分路一开始就定了，选手名一直显示
         band.dataset.bans = String(draft.slots.blue.ban.length);      // 没有禁用位（不带暗禁的自选）时整行禁用都不显示
         const turn = draft.status === 'running' ? draft.turns[draft.turn] : null;
         band.dataset.turn = turn && !turn.both ? turn.side : '';
-        const active = new Set(draft.active.map(ref => ref.side + ref.type + ref.index));
+        // 自定义模式没有顺序，空格不一起闪
+        const active = new Set(draft.custom ? [] : draft.active.map(ref => ref.side + ref.type + ref.index));
 
         SIDES.forEach(side => {
             const team = teams[side];

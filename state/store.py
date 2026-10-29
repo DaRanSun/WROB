@@ -297,7 +297,7 @@ class Store:
         （导播填过、或者识别自己填过）都不执行，也不报错——识别只填空着的或者只是预选的槽位，导播改过的不会被改回去。"""
         if cmd.get("source") != "vision":
             return True
-        if not self.ui.get("autoBp", True):
+        if not self.ui.get("autoBp", True) or self.draft.get("custom"):     # 自定义模式游戏里没有，不接识别
             return False
         ref = cmd.get("slot")
         if ref is not None:
@@ -312,7 +312,7 @@ class Store:
 
     def _draft_start(self, cmd, now):
         if cmd.get("source") == "vision":
-            if self.ui.get("autoBp", True) and self.draft["status"] == "idle":
+            if self.ui.get("autoBp", True) and self.draft["status"] == "idle" and not self.draft.get("custom"):
                 draft_mod.start(self.draft, now)
             return
         if cmd.get("format") and self.draft["status"] == "idle":
@@ -342,11 +342,16 @@ class Store:
 
     def _draft_swap(self, cmd, now):
         draft_mod.swap(self.draft, cmd["a"], cmd["b"])
+        if self.draft.get("custom"):        # 自定义模式分路留在格子上：交换就是改了这两路的英雄
+            self._lineup_to_game()
 
     def _draft_role(self, cmd, now):
         draft_mod.set_role(self.draft, cmd["side"], int(cmd["index"]), cmd["role"])
+        self._lineup_to_game()
+
+    def _lineup_to_game(self):
+        """开局之后才发现分路不对（自选模式最常见）：局内面板每一路的英雄跟着换。识别按游戏里的分路逐行读，不用动。"""
         if self.draft["status"] == "done" and self.game["status"] == "live":
-            # 开局之后才发现分路不对（自选模式最常见）：局内面板每一路的英雄跟着换。识别按游戏里的分路逐行读，不用动
             for side in SIDES:
                 champions = draft_mod.lineup(self.draft, side)
                 for player in self.game["players"][side]:
@@ -356,8 +361,9 @@ class Store:
         draft_mod.confirm_lineup(self.draft)
 
     def _draft_timer(self, cmd, now):
-        if cmd.get("source") == "vision" and (not self.ui.get("autoBp", True) or self.draft["status"] != "running"):
-            return          # 识别按游戏里的读秒对表；导播关了自动 BP、或者已经在调分路（不读秒）时不动
+        if cmd.get("source") == "vision" and (not self.ui.get("autoBp", True) or self.draft["status"] != "running"
+                                              or self.draft.get("custom")):
+            return          # 识别按游戏里的读秒对表；导播关了自动 BP、已经在调分路（不读秒）、自定义模式时不动
         action = cmd.get("action")
         if action == "pause":
             draft_mod.timer_pause(self.draft, now)

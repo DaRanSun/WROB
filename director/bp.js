@@ -15,6 +15,9 @@
     // 自选模式：没有禁用、不读秒（OB 排位、巅峰对决）。按顺序填，填完再对着游戏里的实际分路调整
     const FREE_TEXT = { idle: '自选：按选人顺序填双方英雄', lineup: '自选：对着游戏里的实际分路调整，再确认阵容',
                         done: '阵容已确认（开局后发现分路不对，照样可以在这里改）' };
+    // 自定义模式：游戏里没有，只能观战时用。没有顺序、不读秒，按上野中下辅填，填满后确认阵容再进局内；不接识别
+    const CUSTOM_TEXT = { idle: '自定义：按上野中下辅填双方英雄，哪一格先填都行', running: '自定义：按上野中下辅填双方英雄，哪一格先填都行',
+                          lineup: '自定义：十格都填好了，核对一遍再确认阵容', done: '阵容已确认，可以进入局内' };
     const EMPTY_BAN_TERMS = ['空', '空ban', 'kong', 'kongban', 'none', 'empty', '无'];
 
     const nodes = { forms: {} };
@@ -30,7 +33,8 @@
     const sameRef = (a, b) => Boolean(a && b) && refKey(a) === refKey(b);
     const slotOf = ref => state.draft.slots[ref.side][ref.type][ref.index];
     const slotText = slot => slot.champion ? WROB.champions.name(slot.champion) : slot.locked ? '空 Ban' : '';
-    const slotLabel = ref => WROB.sideNames[ref.side] + ' ' + KIND_NAMES[ref.type] + ' ' + (ref.index + 1);
+    const slotLabel = ref => WROB.sideNames[ref.side] + ' ' + (state && state.draft.custom && ref.type === 'pick'
+        ? WROB.roleNames[WROB.roles[ref.index]] : KIND_NAMES[ref.type] + ' ' + (ref.index + 1));      // 自定义：格子就是分路
     const isHover = slot => Boolean(slot.champion) && !slot.locked;
 
     // 点格子、按“锁定 / 空 Ban”时作用在哪个槽位：有输入框在编辑就是它，否则是流程轮到的那个。
@@ -304,7 +308,7 @@
 
     function buildSides() {
         const draft = state.draft;
-        const key = draft.format + ':' + draft.turns.length + ':' + Boolean(draft.free);
+        const key = draft.format + ':' + draft.turns.length + ':' + Boolean(draft.free) + ':' + Boolean(draft.custom);
         if (key === layoutKey) return;
         layoutKey = key;
         SIDES.forEach(side => {
@@ -313,13 +317,15 @@
             ['ban', 'pick'].forEach(kind => {
                 if (!draft.slots[side][kind].length) return;            // 自选模式没有禁用位
                 const note = kind === 'ban' && draft.blindBans ? '（双方同时暗禁，可以重复）'
+                    : draft.custom ? '（自定义：按分路填，哪格先填都行）'
                     : draft.free && !draft.slots[side].ban.length ? '（自选，不禁用）' : draft.free ? '（按顺序选）' : '';
                 column.append(h('div', { class: 'side-label' }, KIND_NAMES[kind] + note));
                 draft.slots[side][kind].forEach((_, index) => {
                     const ref = { side, type: kind, index };
+                    const role = draft.custom && kind === 'pick' ? WROB.roles[index] : null;      // 自定义：第几格就是哪一路
                     const input = h('input', {
                         type: 'text', class: 'champ-input',
-                        placeholder: KIND_NAMES[kind] + ' ' + (index + 1),
+                        placeholder: role ? WROB.roleNames[role] : KIND_NAMES[kind] + ' ' + (index + 1),
                         autocomplete: 'off', spellcheck: 'false', 'aria-label': slotLabel(ref),
                     });
                     const icon = h('span', { class: 'slot-icon' });
@@ -332,7 +338,7 @@
                         class: 'slot-handle', draggable: 'true', title: '拖到同一方的同类槽位上：交换',
                         ondragstart: event => { dragged = ref; event.dataTransfer.effectAllowed = 'move'; },
                         ondragend: () => { dragged = null; },
-                    }, h('span', { class: 'slot-no num' }, (side === 'blue' ? 'B' : 'R') + (index + 1)), icon);
+                    }, h('span', { class: 'slot-no num' }, role ? WROB.roleShort[role] : (side === 'blue' ? 'B' : 'R') + (index + 1)), icon);
                     const root = h('div', {
                         class: 'slot ' + kind,
                         ondragover: event => {
@@ -357,9 +363,9 @@
 
     function paintSides() {
         const draft = state.draft;
-        const active = new Set(draft.active.map(refKey));
+        const active = new Set(draft.custom ? [] : draft.active.map(refKey));     // 自定义：空格都能填，不标“轮到”
         const aim = targetRef();
-        const showRoles = draft.status === 'lineup' || draft.status === 'done';
+        const showRoles = (draft.status === 'lineup' || draft.status === 'done') && !draft.custom;     // 自定义的分路就是格子
         SIDES.forEach(side => {
             const team = teamOn(state, side);
             ['ban', 'pick'].forEach(kind => draft.slots[side][kind].forEach((slot, index) => {
@@ -456,14 +462,16 @@
         const turn = draft.status === 'running' ? draft.turns[draft.turn] : null;
         const ref = targetRef();
         const slot = ref ? slotOf(ref) : null;
-        nodes.phase.textContent = draft.free && FREE_TEXT[draft.status]
+        nodes.phase.textContent = draft.custom ? CUSTOM_TEXT[draft.status]
+            : draft.free && FREE_TEXT[draft.status]
             ? (draft.status === 'idle' && draft.blindBans ? '暗禁：先填双方的禁用（哪边先都行），再按选人顺序填英雄' : FREE_TEXT[draft.status])
             : turn && turn.both ? turn.phaseName + ' · 双方同时' + KIND_NAMES[turn.type] + '（暗禁，可以重复）'
             : turn ? turn.phaseName + ' · ' + WROB.sideNames[turn.side] + KIND_NAMES[turn.type]
             : STATUS_TEXT[draft.status];
         nodes.phase.dataset.side = turn && !turn.both ? turn.side : '';
         const manual = P && !draft.active.some(item => sameRef(item, P.ref));
-        nodes.target.textContent = !ref ? (draft.status !== 'idle' ? '' : draft.free ? '直接填第一格就开始' : '点“开始 BP”开始读秒，或者直接填第一个槽位')
+        nodes.target.textContent = !ref ? (draft.status !== 'idle' ? '' : draft.custom ? '直接填任意一格就开始'
+                : draft.free ? '直接填第一格就开始' : '点“开始 BP”开始读秒，或者直接填第一个槽位')
             : (manual ? '正在改：' : '轮到：') + slotLabel(ref) + (isHover(slot) ? '（预选 ' + WROB.champions.name(slot.champion) + '，回车锁定）' : '');
         nodes.target.classList.toggle('is-manual', Boolean(manual));
         nodes.hint.textContent = ref ? '点英雄填入 ' + slotLabel(ref)
@@ -471,7 +479,7 @@
 
         nodes.format.hidden = draft.status !== 'idle' || nodes.format.options.length < 2;
         if (draft.status === 'idle' && document.activeElement !== nodes.format) nodes.format.value = draft.format;
-        nodes.start.hidden = draft.status !== 'idle';
+        nodes.start.hidden = draft.status !== 'idle' || Boolean(draft.custom);      // 自定义不读秒，直接填就开始
         nodes.lock.hidden = !(slot && isHover(slot));
         nodes.skip.hidden = !(ref && ref.type === 'ban' && draft.status !== 'idle' && !slot.locked);
         nodes.confirm.hidden = draft.status !== 'lineup';
@@ -484,7 +492,8 @@
         nodes.autoBp.checked = state.ui.autoBp !== false;
         const vision = state.game.vision;
         const reading = vision && vision.screen === 'bp' && WROB.now() - vision.at < 6000;
-        nodes.visionBp.textContent = reading ? (state.ui.autoBp !== false ? '识别正在读选人界面' : '识别看到了选人界面（自动填已关）') : '';
+        nodes.visionBp.textContent = draft.custom ? '自定义模式不接识别，全部手填'
+            : reading ? (state.ui.autoBp !== false ? '识别正在读选人界面' : '识别看到了选人界面（自动填已关）') : '';
     }
 
     function paintResult() {

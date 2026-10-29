@@ -14,8 +14,16 @@
 读秒：标题下面的数字每跳一下，就把导播台的倒计时对到这个数（draft.timer set）；准备阶段不对（那时导播在调分路，
 不读秒）。选人阶段读秒突然跳回去（比如 3 → 29）= 新的一手开始了，上一手（导播台上轮到的那几格）亮着的英雄就是选定的。
 
-“亮出”和“锁定”的区分：读不出锁定那一下，所以按轮次算——标题是“蓝方选择英雄”时，蓝方各行亮出的英雄记成预选
-（draft.hover，面板上是一闪一闪的）；轮到红方（或者进了准备阶段）时，蓝方各行最后亮着的那个才记成选用（draft.lock）。
+“亮出”和“锁定”的区分看名字栏：锁定之后，那一行名字栏的第一行从分路（“中路”）或灰色的“玩家N”变成白色粗体的
+“称号 英雄名”（config/vision.yaml 的 bp.names，只看有没有这么一长串白字，不认字）。所以：
+  · 名字栏连续两次是锁定的样子、而且头像认出的英雄已经稳定了 → 选用（draft.lock）；
+  · 还没锁定、正轮到这一方 → 预选（draft.hover，面板上是一闪一闪的）；不是它的回合时亮出来的只是意向（电脑会在
+    禁用阶段就亮出想选的英雄），不发；
+  · 兜底：进了准备阶段，或者读秒跳回去（新的一手开始），亮着的就是选定的。
+以前只按标题轮次算（轮到另一方时，这一方最后亮着的才算选定），第二轮禁用前的最后几手（蓝 2、3 楼，红 3 楼）会一直
+挂在预选上：红 3 楼之后是红方禁用、红 4 楼，要等到蓝 4 楼才轮到“另一方”；电脑秒选时“红方选择英雄”这个标题
+不到确认的 0.4 秒就过去了（10-25 实测两局都卡在这几楼）。这一局里名字栏的信号一次都没出现过（界面布局变了之类），
+才退回到按标题算，外加“选人开始后又进了禁用，亮着的都算选定”。
 禁用不分亮出：顶部圆圈里出现的就是禁掉的。空 Ban 按“轮”算：游戏从禁用切到选人一次，就过去了一轮禁用；
 那一轮的禁用位（哪几个由导播台选的流程决定：3 Ban 一轮 3 个，赛事征召先 3 后 2）在选人阶段还是“⊘”、
 并且持续了一会儿（最后一手禁用可能正好在切换的那一刻才翻出来），才记成空 Ban。
@@ -51,6 +59,7 @@ EMPTY_CONFIRM = 3
 SKIP_AFTER = 5                  # 一轮禁用结束后，“⊘”还要再连续读到这么多次才记成空 Ban
 COUNT_CONFIRM = 2               # 读秒连续这么多次读成同一个数才算
 COUNT_LAG = 0.3                 # 读秒跳到 v 的那一刻还剩 v + 1 秒；确认时已经过去了约这么久
+LOCK_CONFIRM = 2                # 名字栏连续这么多次是锁定的样子才算锁定
 TIMER_PHASES = ("ban", "reveal", "pick")    # 这几个阶段把导播台的倒计时对到游戏的读秒
 
 
@@ -89,6 +98,47 @@ def pick_circles(frame: np.ndarray, layout: dict) -> dict[str, list[np.ndarray]]
     spec = layout["bp"]["picks"]
     return {side: [_circle(frame, spec["x"][side], spec["y"] + spec["pitch"] * row, spec["radius"]) for row in range(5)]
             for side in SIDES}
+
+
+def name_text_width(band: np.ndarray, spec: dict, flip: bool) -> int:
+    """名字栏第一行最长的一串字有多宽（像素）。flip = 红方（名字靠右，头像在右边）。"""
+    values = band.astype(np.int16)
+    low, high = values.min(axis=2), values.max(axis=2)
+    white = (low > spec["bright"]) & (high - low < spec["gray"])
+    blue, green, red = values[..., 0], values[..., 1], values[..., 2]
+    # 段位徽章是金色、绿色的（行高亮是蓝色、红色，不算）。徽章闪的时候有一块白高光，宽到像一个字，离分路又近
+    badge = ((red > 120) & (green > 100) & (blue < 0.6 * green)) | ((green > 120) & (green - red > 40) & (green - blue > 40))
+    if flip:
+        white, badge = white[:, ::-1], badge[:, ::-1]
+    white[:, :spec["skip"]] = False                     # 头像外圈的白光
+    pieces, start, last = [], None, None
+    for x in np.flatnonzero(white.sum(axis=0) >= 2):    # 一列里至少两个白点
+        if start is None or x - last > 8:               # 字里笔画之间的空不超过 8
+            if start is not None:
+                pieces.append((start, last))
+            start = x
+        last = x
+    if start is not None:
+        pieces.append((start, last))
+    pieces = [(a, z) for a, z in pieces if z - a + 1 >= spec["glyph"]                       # 太窄的不是字
+              and badge[:, max(0, a - 4):z + 5].sum() <= white[:, a:z + 1].sum()]          # 金绿比白还多的是徽章
+    best, run = 0, None
+    for a, z in pieces:
+        run = (run[0], z) if run is not None and a - run[1] <= spec["space"] else (a, z)
+        best = max(best, run[1] - run[0] + 1)
+    return int(best)
+
+
+def name_locked(frame: np.ndarray, layout: dict) -> dict[str, list[bool]]:
+    """每一行名字栏的第一行是不是“称号 英雄名”（锁定了）。见 config/vision.yaml 的 bp.names。"""
+    picks, names = layout["bp"]["picks"], layout["bp"]["names"]
+    (top, bottom), out = names["rows"], {}
+    for side in SIDES:
+        x0, x1 = names["x"][side]
+        out[side] = [name_text_width(frame[int(round(picks["y"] + picks["pitch"] * row)) + top:
+                                           int(round(picks["y"] + picks["pitch"] * row)) + bottom, x0:x1],
+                                     names, side == "red") >= names["width"] for row in range(5)]
+    return out
 
 
 def empty_ink(circle: np.ndarray) -> np.ndarray:
@@ -171,13 +221,16 @@ class BPReader:
                         break
                 if best[0] >= SURE:
                     break
-            if best[0] >= spec["champion_match"] and best[0] - best[1] >= MIN_MARGIN:
+            clear = spec.get("champion_clear") or {}
+            if (best[0] >= spec["champion_match"] and best[0] - best[1] >= MIN_MARGIN) or \
+                    (clear and best[0] >= clear["match"] and best[0] - best[1] >= clear["margin"]):
                 result = best[2]
         self._cache[key] = (crop.astype(np.int16), result)
         return result
 
     def read(self, frame: np.ndarray) -> dict | None:
-        """{"title", "phase", "side", "bans": {side: [英雄 | EMPTY | None]×5}, "picks": {side: [英雄 | None]×5}}。"""
+        """{"title", "phase", "side", "bans": {side: [英雄 | EMPTY | None]×5}, "picks": {side: [英雄 | None]×5},
+        "locked": {side: [名字栏是不是锁定的样子]×5}, "countdown"}。"""
         frame = to_reference(frame, self.layout)
         title = self.title(frame)
         if title is None:
@@ -189,7 +242,7 @@ class BPReader:
         picks = {side: [self.circle(frame, f"{side}.pick.{row}", spec["picks"]["x"][side], spec["picks"]["y"] + spec["picks"]["pitch"] * row,
                                     spec["picks"]["radius"], False) for row in range(5)] for side in SIDES}
         return {"title": label, "phase": PHASES[label], "side": SIDE_OF.get(label), "bans": bans, "picks": picks,
-                "countdown": self.countdown(frame)}
+                "locked": name_locked(frame, self.layout), "countdown": self.countdown(frame)}
 
 
 class _Steady:
@@ -221,6 +274,9 @@ class BPTracker:
         self.in_ban = False                 # 正处在一轮禁用里（含禁用显示）
         self.rounds_done = 0                # 已经结束的禁用轮数（从禁用切到选人一次算一轮）
         self.empty_reads = {}               # 槽位 → 那一轮结束后连续读到“⊘”的次数
+        self.picking = False                # 已经到过选人阶段
+        self.lock_votes = {}                # 选人槽位 → 名字栏连续是锁定样子的次数
+        self.names_work = False             # 这一局名字栏的锁定信号出现过（没出现过就退回按标题轮次算）
         self.count = None                   # 已确认的读秒
         self._count_candidate, self._count_streak = None, 0
 
@@ -284,6 +340,8 @@ class BPTracker:
         elif phase == "pick" and self.in_ban:
             self.in_ban = False
             self.rounds_done += 1
+        if phase == "pick":
+            self.picking = True
         sizes = {kind: len(draft["slots"]["blue"][kind]) for kind in ("ban", "pick")} if draft else {"ban": 5, "pick": 5}
         finished = self._finished_bans(draft, sizes["ban"], everything=phase == "ready")
         reset = self._countdown(reading.get("countdown"), phase, commands)
@@ -324,15 +382,27 @@ class BPTracker:
                 if self.empty_reads[key] >= SKIP_AFTER:
                     send("skip", ref, None)
 
-        # 选人：轮到的一方亮出的是预选；不是它的回合了（或者进了准备阶段），最后亮着的就是选定的
-        if phase in ("pick", "ready"):
+        # 选人：名字栏变成“称号 英雄名”就是锁定了；轮到的一方还没锁的是预选（见文件开头）
+        if phase in ("pick", "ready") or (self.picking and phase in ("ban", "reveal")):
+            locked_rows = reading.get("locked") or {}
             for pick_side in SIDES:
                 for index, value in enumerate(reading["picks"][pick_side][:sizes["pick"]]):
-                    steady = self._steady(f"{pick_side}.pick.{index}")
+                    key = f"{pick_side}.pick.{index}"
+                    steady = self._steady(key)
                     steady.offer(value, CHAMPION_CONFIRM)
+                    flags = locked_rows.get(pick_side) or []
+                    self.lock_votes[key] = self.lock_votes.get(key, 0) + 1 if index < len(flags) and flags[index] else 0
+                    by_name = self.lock_votes[key] >= LOCK_CONFIRM
+                    self.names_work = self.names_work or by_name
                     if steady.value is None:
                         continue
                     ref = {"side": pick_side, "type": "pick", "index": index}
-                    turn_over = phase == "ready" or (side is not None and side != pick_side) or (pick_side, index) in ended
-                    send("lock" if turn_over else "hover", ref, steady.value)
+                    own_turn = phase == "pick" and side in (None, pick_side)
+                    if by_name or phase == "ready" or (pick_side, index) in ended:
+                        if steady.candidate == steady.value:        # 头像还在换（最后一秒换了英雄）：等它稳定再锁
+                            send("lock", ref, steady.value)
+                    elif own_turn:
+                        send("hover", ref, steady.value)
+                    elif not self.names_work:                       # 名字栏不灵：按标题轮次算
+                        send("lock", ref, steady.value)
         return commands

@@ -72,11 +72,14 @@ def test_other_screens_are_not_bp(reader):
 
 # ---- 追踪：读数 → 命令 ----
 
-def reading(title, bans=None, picks=None, countdown=None):
+def reading(title, bans=None, picks=None, countdown=None, locked=None):
+    """locked：名字栏是锁定样子的槽位，{"blue": [0, 2]} 这样写；不给就是名字栏读不出锁定（退回按标题算）。"""
     from vision.bp import PHASES, SIDE_OF
     bans = bans or {"blue": [E] * 5, "red": [E] * 5}
     picks = picks or {"blue": [None] * 5, "red": [None] * 5}
-    return {"title": title, "phase": PHASES[title], "side": SIDE_OF.get(title), "bans": bans, "picks": picks, "countdown": countdown}
+    flags = {side: [index in (locked or {}).get(side, []) for index in range(5)] for side in ("blue", "red")}
+    return {"title": title, "phase": PHASES[title], "side": SIDE_OF.get(title), "bans": bans, "picks": picks,
+            "locked": flags, "countdown": countdown}
 
 
 def run(tracker, item, times=4, draft=None, start=0.0):
@@ -107,6 +110,64 @@ def test_hover_until_the_turn_passes(store):
     draft["slots"]["red"]["pick"][1].update(champion="garen", locked=True)
     out = run(tracker, reading("准备阶段", bans, picks(["hwei"], ["morgana", "ashe"])), draft=draft)
     assert out == [("lock", "red", "pick", 0, "morgana")]
+
+
+def test_picks_before_the_second_ban_round_lock(store):
+    """赛事征召：蓝 2、3 楼选完，红 3 楼是电脑秒选，“红方选择英雄”的标题没到确认就直接进了第二轮禁用（10-25 第二局）。
+    禁用期间没人能选，两边亮着的都是选定的：蓝 2、3 楼和红 3 楼马上锁定，不用等到蓝 4 楼。"""
+    store.apply({"type": "draft.reset", "format": "tournament"}, 0)
+    draft = store.snapshot(0)["draft"]
+    tracker = BPTracker()
+    bans = {"blue": ["ziggs", "hecarim", "graves", E, E], "red": ["vladimir", "tryndamere", "sett", E, E]}
+    run(tracker, reading("蓝方选择英雄", bans, picks(["smolder"], [])), draft=draft)
+    run(tracker, reading("红方选择英雄", bans, picks(["smolder"], ["heimerdinger", "singed"])), draft=draft, start=1.0)
+    out = run(tracker, reading("蓝方选择英雄", bans, picks(["smolder", "wukong", "lucian"], ["heimerdinger", "singed"])), draft=draft, start=2.0)
+    assert ("hover", "blue", "pick", 1, "wukong") in out and ("hover", "blue", "pick", 2, "lucian") in out
+    out = run(tracker, reading("红方禁用英雄", bans, picks(["smolder", "wukong", "lucian"], ["heimerdinger", "singed", "caitlyn"])),
+              draft=draft, start=3.0)
+    assert {item for item in out if item[2] == "pick"} == {
+        ("lock", "blue", "pick", 1, "wukong"), ("lock", "blue", "pick", 2, "lucian"), ("lock", "red", "pick", 2, "caitlyn")}
+
+
+def test_name_bar_locks_each_pick_as_it_happens(store):
+    """名字栏变成“称号 英雄名”就锁定，不等标题换边：连选的两手各锁各的（蓝 2 楼锁了、蓝 3 楼还在挑）。"""
+    store.apply({"type": "draft.reset", "format": "tournament"}, 0)
+    draft = store.snapshot(0)["draft"]
+    tracker = BPTracker()
+    out = run(tracker, reading("蓝方选择英雄", picks=picks(["lux"], [])), draft=draft)
+    assert out == [("start", None, None, None, None), ("hover", "blue", "pick", 0, "lux")]
+    out = run(tracker, reading("蓝方选择英雄", picks=picks(["lux"], []), locked={"blue": [0]}), draft=draft, start=1.0)
+    assert out == [("lock", "blue", "pick", 0, "lux")]
+    out = run(tracker, reading("蓝方选择英雄", picks=picks(["lux", "garen", "jinx"], ["ahri", "zed"]),
+                               locked={"blue": [0, 1], "red": [0, 1]}), draft=draft, start=2.0)
+    assert set(out) == {("lock", "blue", "pick", 1, "garen"), ("hover", "blue", "pick", 2, "jinx"),
+                        ("lock", "red", "pick", 0, "ahri"), ("lock", "red", "pick", 1, "zed")}
+
+
+def test_intents_off_turn_are_not_picks():
+    """名字栏的信号出现过之后，不是这一方回合时亮出来的英雄（电脑在禁用阶段就会亮出想选的）只是意向：不发预选也不锁。"""
+    tracker = BPTracker()
+    run(tracker, reading("蓝方选择英雄", picks=picks(["lux"], []), locked={"blue": [0]}))
+    out = run(tracker, reading("红方选择英雄", picks=picks(["lux", "", "", "nautilus"], ["ahri"])), start=1.0)
+    assert [item for item in out if item[1] == "blue"] == []
+    out = run(tracker, reading("红方禁用英雄", picks=picks(["lux"], ["ahri", "zed", "", "", "teemo"]), locked={"red": [0, 1]}), start=2.0)
+    assert set(out) == {("lock", "red", "pick", 0, "ahri"), ("lock", "red", "pick", 1, "zed")}
+
+
+def test_lock_waits_for_the_portrait_to_settle():
+    """最后一秒换了英雄：名字栏已经是锁定的样子，头像的读数还没稳定到新英雄，先等，别把上一个锁上。"""
+    tracker = BPTracker()
+    run(tracker, reading("蓝方选择英雄", picks=picks(["ahri"], [])))
+    out = run(tracker, reading("蓝方选择英雄", picks=picks(["zed"], []), locked={"blue": [0]}), start=1.0)
+    assert ("lock", "blue", "pick", 0, "zed") in out and ("lock", "blue", "pick", 0, "ahri") not in out
+
+
+def test_prepick_intents_are_not_locked_by_the_ban_phase():
+    """3 Ban 的预选阶段在禁用之前：那时亮出来的只是意向，进了禁用阶段也不能当成选定。"""
+    tracker = BPTracker()
+    intents = picks(["ahri"], ["jinx"])
+    out = run(tracker, reading("预选阶段", picks=intents)) + run(tracker, reading("禁用阶段", picks=intents), start=1.0)
+    assert not [item for item in out if item[2] == "pick"]
 
 
 def test_empty_bans_wait_for_the_round_to_end(store):
@@ -213,6 +274,41 @@ def test_countdown_restart_locks_the_previous_pick(store):
     assert ("lock", "red", "pick", 0, "lux") in out
 
 
+def test_reads_dark_portraits_and_locked_names(reader):
+    """10-25 实机两帧（tests/fixtures/bp-pyke.npz，头像连名字栏）：准备阶段十个人都锁了，蓝 4 楼的派克头像很暗
+    （0.64，第二像的 0.28），按 champion_clear 认出；蓝方 1 楼正在挑（亮出奥莉安娜，名字栏还是“中路”）时一个都没锁。"""
+    expected = {
+        "ready": ({"blue": ["corki", "nasus", "jinx", "pyke", "ekko"], "red": ["smolder", "garen", "caitlyn", "alistar", "olaf"]}, True),
+        "hover": ({"blue": ["orianna", None, None, None, None], "red": [None] * 5}, False),
+    }
+    for key, (expected_picks, locked) in expected.items():
+        canvas = np.zeros((1264, 2800, 3), np.uint8)
+        with np.load(FIXTURES / "bp-pyke.npz") as data:
+            for name, (y0, y1, x0, x1) in json.loads(str(data["regions"])).items():
+                canvas[y0:y1, x0:x1] = data[f"{key}.{name}"]
+        reader._cache.clear()
+        result = reader.read(canvas)
+        assert result["picks"] == expected_picks
+        assert result["locked"] == {"blue": [locked] * 5, "red": [locked] * 5}
+
+
+def test_name_bars_with_rank_badges(reader):
+    """10-19 真人 3 Ban（tests/fixtures/bp-names.npz）：分路前面有段位徽章，蓝 5 楼那个带翅膀的徽章会闪（3310 秒正闪着），
+    都不能当成锁定；准备阶段十个人都锁了，包括“逆羽 霞”“幻翎 洛”这种很短的称号和名字、带徽章的“影流之镰 凯隐”。"""
+    def load(key):
+        canvas = np.zeros((1264, 2800, 3), np.uint8)
+        with np.load(FIXTURES / "bp-names.npz") as data:
+            for name, (y0, y1, x0, x1) in json.loads(str(data["regions"])).items():
+                canvas[y0:y1, x0:x1] = data[f"{key}.{name}"]
+        reader._cache.clear()
+        return reader.read(canvas)
+    for key in ("g1740", "g3310"):
+        assert load(key)["locked"] == {"blue": [False] * 5, "red": [False] * 5}
+    result = load("g3590")
+    assert result["locked"] == {"blue": [True] * 5, "red": [True] * 5}
+    assert result["picks"] == {"blue": ["swain", "xayah", "rakan", "ornn", "kayn"], "red": ["varus", "sona", "ahri", "nidalee", "fiora"]}
+
+
 def test_reads_the_real_phone_screen(reader):
     """10-20 晚直播：数据机实际的画面（2800×1264，adb 截图）比 1280 的录屏清晰得多，标题只对上 0.82，
     当时的门槛 0.85 没过，整个选人界面都没认出来。补了实机的标题模板、门槛降到 0.7。"""
@@ -224,4 +320,5 @@ def test_reads_the_real_phone_screen(reader):
     reading = reader.read(canvas)
     assert reading["title"] == "蓝方选择英雄" and reading["countdown"] == 28
     assert reading["bans"] == {"blue": ["singed", "yone", "yuumi", E, E], "red": ["katarina", "xin-zhao", "jax", E, E]}
-    assert reading["picks"] == {"blue": ["irelia", None, None, None, None], "red": ["galio", "teemo", None, None, None]}
+    # 蓝方 2 楼是电脑亮出的意向（亚托克斯，名字栏还是“单人”）：头像偏暗只有 0.7 左右，但和第二像的差 0.3，按 champion_clear 认出
+    assert reading["picks"] == {"blue": ["irelia", "aatrox", None, None, None], "red": ["galio", "teemo", None, None, None]}

@@ -327,3 +327,80 @@ def test_blind_bans_then_free_picks(store):
     assert store.series["games"][-1]["bans"] == {"blue": ["zed", "jinx", "ahri"], "red": ["zed", "lux", "vi"]}
     assert store.postgame["bans"]["red"] == ["zed", "lux", "vi"]
     assert store.draft["format"] == "blind3"                           # 下一局还是 3 Ban
+
+
+# ---- 自定义（游戏里没有：拿不到 BP、只能观战时用）----
+
+def custom_store(store):
+    store.apply({"type": "draft.reset", "format": "custom"}, 0)
+    store.apply({"type": "draft.start"}, 0)
+    return store
+
+
+def test_custom_fills_by_role_in_any_order(store):
+    """不禁用、没有顺序、不读秒：分路就是格子，哪一格先填都行；十格填满进入阵容阶段，确认之后才进局内。"""
+    draft = custom_store(store).draft
+    assert draft["custom"] and draft["slots"]["blue"]["ban"] == [] and draft["status"] == "running"
+    assert draft["timer"]["running"] is False and draft["timer"]["totalMs"] == 0
+    assert [slot["role"] for slot in draft["slots"]["red"]["pick"]] == list(ROLES)
+    assert len(store.snapshot(0)["draft"]["active"]) == 10                          # 十格一起开放
+    order = [("red", 2), ("blue", 4), ("blue", 0), ("red", 0), ("red", 4), ("blue", 2), ("red", 1), ("blue", 1), ("red", 3), ("blue", 3)]
+    picks = {"blue": BLUE_PICKS, "red": RED_PICKS}
+    for number, (side, index) in enumerate(order):
+        assert store.draft["status"] == "running"
+        store.apply({"type": "draft.lock", "champion": picks[side][index], "slot": slot(side, "pick", index)}, 1000 * number)
+    draft = store.draft
+    assert draft["status"] == "lineup" and draft["timer"]["running"] is False
+    assert [slot["role"] for slot in draft["slots"]["blue"]["pick"]] == list(ROLES)    # 分路没被“猜”改掉
+    with pytest.raises(CommandError, match="格子"):
+        store.apply({"type": "draft.role", "side": "blue", "index": 0, "role": "mid"}, 0)
+    store.apply({"type": "draft.confirm"}, 0)
+    assert store.draft["status"] == "done"
+    store.apply({"type": "game.new"}, 0)
+    assert [player["champion"] for player in store.game["players"]["red"]] == RED_PICKS
+
+
+def test_custom_swap_keeps_roles_and_follows_into_the_game(store):
+    """填错了一路：拖动交换，英雄换格子、分路留在格子上；开局之后交换，局内面板跟着换。清掉一格退回填写。"""
+    custom_store(store)
+    for side, picks in (("blue", BLUE_PICKS), ("red", RED_PICKS)):
+        for index, champion in enumerate(picks):
+            store.apply({"type": "draft.lock", "champion": champion, "slot": slot(side, "pick", index)}, 0)
+    store.apply({"type": "draft.confirm"}, 0)
+    store.apply({"type": "game.new"}, 0)
+    store.apply({"type": "draft.swap", "a": slot("blue", "pick", 0), "b": slot("blue", "pick", 3)}, 0)
+    blue = store.draft["slots"]["blue"]["pick"]
+    assert (blue[0]["champion"], blue[0]["role"], blue[3]["champion"], blue[3]["role"]) == (BLUE_PICKS[3], "top", BLUE_PICKS[0], "bot")
+    players = store.game["players"]["blue"]
+    assert players[0]["champion"] == BLUE_PICKS[3] and players[3]["champion"] == BLUE_PICKS[0]
+    store.apply({"type": "draft.clear", "slot": slot("red", "pick", 2)}, 0)
+    red = store.draft["slots"]["red"]["pick"]
+    assert store.draft["status"] == "running" and red[2] == {"champion": None, "locked": False, "role": "mid"}
+
+
+def test_custom_follows_fearless_and_no_duplicates(store):
+    """无畏征召照常：双边无畏时上一局用过的英雄不能填；同一局两边也不能是同一个英雄（按住 Shift 可以强行）。"""
+    store.apply({"type": "series.update", "patch": {"fearless": "global"}}, 0)
+    play_draft(store)
+    store.apply({"type": "draft.confirm"}, 0)
+    store.apply({"type": "series.finish_game", "winner": "a"}, 0)
+    custom_store(store)
+    with pytest.raises(CommandError, match="无畏征召"):
+        store.apply({"type": "draft.lock", "champion": RED_PICKS[2], "slot": slot("blue", "pick", 2)}, 0)
+    store.apply({"type": "draft.lock", "champion": "ahri", "slot": slot("blue", "pick", 2)}, 0)
+    with pytest.raises(CommandError, match="本局已选用"):
+        store.apply({"type": "draft.lock", "champion": "ahri", "slot": slot("red", "pick", 2)}, 0)
+
+
+def test_custom_ignores_vision_bp(store):
+    """自定义模式游戏里没有，识别读到选人界面发来的命令（开始、预选、锁定、空 Ban、对表）一概不收。"""
+    store.apply({"type": "draft.reset", "format": "custom"}, 0)
+    store.apply({"type": "draft.start", "source": "vision"}, 0)
+    assert store.draft["status"] == "idle"
+    store.apply({"type": "draft.start"}, 0)
+    store.apply({"type": "draft.lock", "source": "vision", "champion": "ahri", "slot": slot("blue", "pick", 0)}, 0)
+    store.apply({"type": "draft.hover", "source": "vision", "champion": "zed", "slot": slot("red", "pick", 0)}, 0)
+    store.apply({"type": "draft.timer", "source": "vision", "action": "set", "seconds": 20}, 0)
+    draft = store.draft
+    assert draft["slots"]["blue"]["pick"][0]["champion"] is None and draft["slots"]["red"]["pick"][0]["champion"] is None
+    assert draft["timer"]["totalMs"] == 0

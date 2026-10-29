@@ -231,7 +231,7 @@
     background: var(--gold);
     border-radius: 3px;
 }
-.band[data-status="done"] .pick .who { display: flex; }
+.band[data-status="done"] .pick .who, .band[data-custom="1"] .pick .who { display: flex; }
 
 .pick .tag {
     position: absolute;
