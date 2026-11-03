@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""做多杀播报的模板（vision/templates/announce.npz）：“连破”两个字，和前面的数字“二 / 三 / 四 / 五”。
+"""做多杀播报的模板（vision/templates/announce.npz）：“连破”两个字，前面的数字“二 / 三 / 四 / 五”，
+和开头的“蓝 / 红”（哪一方）。
 
 模板来自录像里真实的播报。挑一个播报完整显示、字最清楚的时刻：
 
     python tools/build_announce.py add data/recordings/x.h264 --at 553.6 --count 2
-        录像第 553.6 秒画面上是一条“X方二连破”。它的“连破”和“二”存进 data/announce-samples/，然后重做模板。
+        录像第 553.6 秒画面上是一条“X方二连破”。它的“连破”、“二”和开头的“X”存进 data/announce-samples/，
+        然后重做模板。字按颜色找（粉白 / 浅青哪种多用哪种）；写的是哪一方默认也按颜色猜，
+        皮肤自带的播报颜色和阵营对不上时用 --side 指明字上写的是哪一方（比如粉色字的“蓝方三连破”：--side blue）。
 
     python tools/build_announce.py build
         按 data/announce-samples/ 里已有的样本重做模板。
@@ -55,8 +58,9 @@ def add(args) -> None:
     spec = layout["announce"]
     frame = frame_at(args.recording, args.at)
     strip = frame[spec["rows"][0]:spec["rows"][1], spec["x"][0]:spec["x"][1]]
-    side = args.side or max(announce.INKS, key=lambda name: announce.INKS[name](strip).sum())
-    lines = announce.text_lines(announce.INKS[side](strip))
+    ink = max(announce.INKS, key=lambda name: announce.INKS[name](strip).sum())
+    side = args.side or ink
+    lines = announce.text_lines(announce.INKS[ink](strip))
     if not lines:
         sys.exit("这一帧上找不到播报的那一行字")
     # 上下几条候选里，字的墨迹最集中在中间的那一条（上下边缘留白最多）
@@ -65,11 +69,23 @@ def add(args) -> None:
     lianpo = line[:, at:at + LIANPO_WIDTH]
     left = at + announce.DIGIT_SPAN[0]
     digit = line[:, left:left + announce.DIGIT_SPAN[1] - announce.DIGIT_SPAN[0]]
+    team = line[:, max(0, at + announce.TEAM_SPAN[0]):at + announce.TEAM_SPAN[1]]
     SAMPLES.mkdir(parents=True, exist_ok=True)
     name = f"{args.count}-{side}-{args.recording.stem}-{args.at:.1f}.npz"
-    np.savez_compressed(SAMPLES / name, lianpo=lianpo, digit=digit, count=args.count)
-    print(f"存了 {name}（{side} 方的播报）")
+    np.savez_compressed(SAMPLES / name, lianpo=lianpo, digit=digit, count=args.count, team=team, side=side, ink=ink)
+    print(f"存了 {name}（{side} 方的播报，字是{'粉白' if ink == 'red' else '浅青'}色的）")
     build(args)
+
+
+def first_glyph(region: np.ndarray) -> np.ndarray | None:
+    """开头那个字（“蓝”或“红”）：从左往右第一处连着三列都有墨迹的地方起，取 TEAM_WIDTH 列。
+    左边偶尔有几点零星的墨迹（底板上的闪光），一列只有一两个点，不算。"""
+    solid = region.sum(axis=0) >= 3
+    for x in range(len(solid) - 2):
+        if solid[x:x + 3].all():
+            glyph = region[:, x:x + announce.TEAM_WIDTH]
+            return glyph if glyph.shape[1] == announce.TEAM_WIDTH else None
+    return None
 
 
 def render_missing(missing: list[int], size: tuple[int, int]) -> dict[int, np.ndarray]:
@@ -108,7 +124,7 @@ def build(_args=None) -> None:
     files = [path for path in files if not path.name.startswith("_")]
     if not files:
         sys.exit(f"{SAMPLES} 里还没有样本：先用 add 从录像里加")
-    lianpo, digits, labels, rendered_flags = [], [], [], []
+    lianpo, digits, labels, rendered_flags, teams, team_labels = [], [], [], [], [], []
     for path in files:
         with np.load(path) as data:
             lianpo.append(announce.resize(data["lianpo"], LIANPO_WIDTH, announce.HEIGHT))
@@ -116,6 +132,12 @@ def build(_args=None) -> None:
             digits.append(announce.resize(data["digit"], width, announce.HEIGHT))
             labels.append(str(int(data["count"])))
             rendered_flags.append(False)
+            glyph = first_glyph(data["team"]) if "team" in data else None
+            if glyph is not None:
+                teams.append(glyph.astype(np.float32))
+                team_labels.append(str(data["side"]))
+    if len(set(team_labels)) < 2:
+        sys.exit("样本里要有蓝方、红方的播报各至少一条（旧样本没存开头那个字的，用 add 在原来的时刻重新加一次）")
     seen = {int(label) for label in labels}
     rendered = render_missing(sorted(set(LABELS) - seen), digits[0].shape)
     if rendered:                    # 渲染字要和渲染的二三四一起比，才知道“最像五”是不是真的
@@ -124,10 +146,12 @@ def build(_args=None) -> None:
             labels.append(str(count))
             rendered_flags.append(True)
     np.savez_compressed(TARGET, lianpo=np.stack(lianpo), digits=np.stack(digits),
-                        digit_labels=np.array(json.dumps(labels)), digit_rendered=np.array(rendered_flags))
+                        digit_labels=np.array(json.dumps(labels)), digit_rendered=np.array(rendered_flags),
+                        teams=np.stack(teams), team_labels=np.array(json.dumps(team_labels)))
     real = sorted({label for label, flag in zip(labels, rendered_flags) if not flag})
     print(f"{len(files)} 个样本 → {TARGET.relative_to(ROOT)}；有真实样本的：{'、'.join(LABELS[int(x)] for x in real)}"
-          + (f"；渲染补上的：{'、'.join(LABELS[c] for c in sorted(set(LABELS) - seen))}" if rendered else ""))
+          + (f"；渲染补上的：{'、'.join(LABELS[c] for c in sorted(set(LABELS) - seen))}" if rendered else "")
+          + f"；开头的字：蓝 {team_labels.count('blue')} 个、红 {team_labels.count('red')} 个")
 
 
 def main() -> None:
@@ -137,7 +161,8 @@ def main() -> None:
     adder.add_argument("recording", type=Path)
     adder.add_argument("--at", type=float, required=True, help="录像里的秒数")
     adder.add_argument("--count", type=int, required=True, choices=sorted(LABELS), help="几连破")
-    adder.add_argument("--side", choices=sorted(announce.INKS), help="哪一方的播报（不给就按字的颜色猜）")
+    adder.add_argument("--side", choices=sorted(announce.INKS),
+                       help="字上写的是哪一方（不给就按字的颜色猜；皮肤自带的播报颜色可能和阵营对不上）")
     adder.set_defaults(run=add)
     commands.add_parser("build").set_defaults(run=build)
     args = parser.parse_args()

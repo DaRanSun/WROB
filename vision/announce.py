@@ -1,10 +1,12 @@
 """读屏幕上方游戏自己的击杀播报，认出多杀：“红方二连破”“蓝方四连破!”这一类。只用 numpy。
 
-播报在画面上方居中（击杀者头像在左、被击杀者在右，中间一行字），出现一秒多。字的颜色跟着阵营：
-红方粉白色，蓝方浅青色（蓝方有的播报底板是亮蓝紫色的，所以不能简单地按亮度找字）。
+播报在画面上方居中（击杀者头像在左、被击杀者在右，中间一行字），出现一秒多。字的颜色一般跟着阵营：
+红方粉白色，蓝方浅青色（蓝方有的播报底板是亮蓝紫色的，所以不能简单地按亮度找字）。但有的皮肤自带播报样式，
+颜色不跟阵营：10-26 那局蓝方卡莎的播报是粉紫色底板、粉白色字，按颜色会当成红方（三杀因此记给了红方）。
 
 做法：按两种颜色各做一张墨迹图，找出那一行字（按原尺寸，上下微调几个像素对齐），在里面滑动找“连破”两个字；
-找到了，它左边那个字就是几连破，和模板里的“二 / 三 / 四 / 五”比。模板来自录像（tools/build_announce.py）；
+找到了，它左边那个字就是几连破，和模板里的“二 / 三 / 四 / 五”比。哪一方看开头那个字是“蓝”还是“红”，
+认不准时才按字的颜色算。模板来自录像（tools/build_announce.py）；
 游戏里还没见过五连破，“五”先用系统字体渲染的，录到真的之后补进去。
 """
 from __future__ import annotations
@@ -25,6 +27,10 @@ DIGIT_MARGIN = 0.1          # 而且比第二像的高出这么多
 RENDERED_MIN = 0.45         # 渲染出来的字（还没见过真的）要求低一些，但必须是渲染字里最像的
 DIGIT_SPAN = (-39, -3)      # 数字在“连”左边的这一段（缩放后的列）
 DIGIT_SHIFT = 4             # 数字的位置左右允许偏几列
+TEAM_SPAN = (-145, -75)     # 开头的“蓝 / 红”在“连”左边的这一段里（实测“蓝”从 -128 列起，“红”从 -118 列起）
+TEAM_WIDTH = 38             # “蓝 / 红”一个字的宽度
+TEAM_MIN = 0.5              # 最像的那个字至少要这么像
+TEAM_MARGIN = 0.1           # 而且比另一方的字高出这么多；否则按字的颜色算哪一方
 
 
 def ink_red(roi: np.ndarray) -> np.ndarray:
@@ -110,6 +116,8 @@ class Announcer:
             self.lianpo = [_unit(t) for t in data["lianpo"]]
             self.digits = [(label, _unit(t), bool(rendered)) for label, t, rendered in
                            zip(json.loads(str(data["digit_labels"])), data["digits"], data["digit_rendered"])]
+            self.teams = [(side, _unit(t)) for side, t in zip(json.loads(str(data["team_labels"])), data["teams"])] \
+                if "teams" in data else []
         self.lianpo_width = self.lianpo[0].shape[1]
         self.digit_width = self.digits[0][1].shape[1]
 
@@ -153,11 +161,30 @@ class Announcer:
                 return int(label)
         return None
 
+    def _team(self, lines: list[np.ndarray], at: int) -> str | None:
+        """播报开头写的是“蓝方”还是“红方”：开头那个字和两边的模板比。认不准返回 None。"""
+        best: dict[str, float] = {}
+        left = max(0, at + TEAM_SPAN[0])
+        for line in lines:
+            region = line[:, left:max(left, at + TEAM_SPAN[1])]
+            if region.shape[1] < TEAM_WIDTH or region.sum() == 0:
+                continue
+            windows = np.lib.stride_tricks.sliding_window_view(region, (HEIGHT, TEAM_WIDTH))[0]
+            centred = windows - windows.mean(axis=(1, 2), keepdims=True)
+            norms = np.linalg.norm(centred.reshape(len(centred), -1), axis=1) + 1e-6
+            for side, template in self.teams:
+                score = float((np.einsum("nhw,hw->n", centred, template) / norms).max())
+                best[side] = max(best.get(side, -1.0), score)
+        ranked = sorted(best.values(), reverse=True)
+        if len(ranked) < 2 or ranked[0] < TEAM_MIN or ranked[0] - ranked[1] < TEAM_MARGIN:
+            return None
+        return max(best, key=best.get)
+
     def read(self, frame: np.ndarray) -> dict | None:
         """{"side": "red", "count": 3, "score": 0.86}；count 可能是 None（是多杀播报，但认不准几连破）。没有多杀播报返回 None。"""
         strip = frame[self.y0:self.y1, self.x0:self.x1]
         best = None
-        for side, ink in INKS.items():
+        for colour, ink in INKS.items():
             mask = ink(strip)
             if mask.sum() < MIN_INK:
                 continue
@@ -167,7 +194,7 @@ class Announcer:
                 continue
             score, at, y0 = found
             if score >= LIANPO_MIN and (best is None or score > best["score"]):
-                soft = SOFT_INKS[side](strip)
-                best = {"side": side, "count": self._digit([mask[y0:y0 + HEIGHT], soft[y0:y0 + HEIGHT]], at),
+                lines = [mask[y0:y0 + HEIGHT], SOFT_INKS[colour](strip)[y0:y0 + HEIGHT]]
+                best = {"side": self._team(lines, at) or colour, "count": self._digit(lines, at),
                         "score": round(score, 3)}
         return best

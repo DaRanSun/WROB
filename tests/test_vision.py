@@ -255,6 +255,17 @@ def test_reads_spells_and_runes(reader):
     assert len(lights["red.4.item"]) == 6 and min(lights["red.4.spell"]) > 150
 
 
+def test_reads_hexflash_apart_from_flash(reader):
+    """10-26 第四局两边辅助闪现格里的“海克斯闪现”（闪现冷却时换上的替身图标，图标库里是用户给的那张）。
+    读数照实报海克斯闪现，面板上按闪现显示由 tracker 负责。刚用掉闪现时替身是暗的，可能认不出，但不能认成闪现。"""
+    with np.load(FIXTURES / "spells-hexflash.npz") as data:
+        cells = {key: data[key] for key in data.files}
+    assert reader.spells.match(cells["hexflash_red"]) == "海克斯闪现"
+    assert reader.spells.match(cells["hexflash_blue"]) == "海克斯闪现"
+    assert reader.spells.match(cells["flash"]) == "闪现"
+    assert reader.spells.match(cells["hexflash_used"]) in (UNKNOWN, "海克斯闪现")
+
+
 def test_reads_levels(reader):
     """头像右下角的等级。数字压在头像上：阵亡时不显示（None）；十位被头像的亮斑糊住时只读得出个位（12 → 2、
     10 → 0）；带小尖角的 11 在个别头像上会读成 14。后两种由 tracker 结合之前的等级纠正。"""
@@ -914,6 +925,54 @@ def test_teleport_opening_cooldown_and_unleashed_swap():
     assert end - start == 150
 
 
+def test_hexflash_keeps_the_real_flash_cooldown():
+    """10-26 第四局红方蕾欧娜带了海克斯闪现符文：闪现用掉后格子里换成“海克斯闪现”，150 秒后闪现转好时换回来。
+    海克斯闪现每用一次格子就暗十来秒，以前每次都当成“又用了一次闪现”，读条从头再来。
+    现在面板上一直报闪现，读条从闪现变暗那一刻起 150 秒，中间海克斯闪现怎么暗、怎么亮都不管。"""
+    tracker = Tracker()
+    flash = dict(red_4_spells=["引燃", "闪现"], red_4_items=BUILD)
+    hexflash = dict(red_4_spells=["引燃", "海克斯闪现"], red_4_items=BUILD)
+    dim = dict(red_4_spells=["引燃", UNKNOWN], red_4_items=BUILD)
+    lamp_run(tracker, [{"red.4.spell": [150, 172]}] * 5, **flash)
+    seen = lamp_run(tracker, [{"red.4.spell": [150, 40]}] * 50, start=1.0, **dim)       # 用了闪现，暗了 10 秒
+    start, end = next(step for step in seen if step)["red.4.cooldowns"]["spell.1"]
+    assert end - start == 150
+    for begin in (11, 41, 71, 101):                     # 换成海克斯闪现：亮 20 秒，用掉暗 10 秒，再亮……
+        seen = lamp_run(tracker, [{"red.4.spell": [150, 145]}] * 100, start=begin, **hexflash)
+        seen += lamp_run(tracker, [{"red.4.spell": [150, 38]}] * 50, start=begin + 20, **dim)
+        assert not any(seen)
+    assert not any(lamp_run(tracker, [{"red.4.spell": [150, 145]}] * 95, start=131, **hexflash))
+    assert tracker.cooldowns["red.4"]["spell.1"] == [start, end]
+    assert tracker._row("red.4.spells", 2) == ["引燃", "闪现"]                           # 面板上一直是闪现
+    # 150 秒到了，闪现换回来、亮着：读条正好读完。之后再用闪现，照常从头 150 秒
+    seen = lamp_run(tracker, [{"red.4.spell": [150, 172]}] * 25, start=150, **flash)
+    assert [step["red.4.cooldowns"] for step in seen if step] == [{}]
+    seen = lamp_run(tracker, [{"red.4.spell": [150, 40]}] * 3, start=155, **dim)
+    again = next(step for step in seen if step)["red.4.cooldowns"]["spell.1"]
+    assert again[1] - again[0] == 150 and again[0] > end
+
+
+def test_hexflash_shows_up_the_moment_flash_is_used():
+    """录像里闪现一用掉，格子立刻换成暗着的海克斯闪现，常常等不到“暗了”确认就先认出了替身：读条从变暗那一刻起 150 秒。"""
+    def used(icon):
+        tracker = Tracker()
+        lamp_run(tracker, [{"red.4.spell": [150, 172]}] * 5, red_4_spells=["引燃", "闪现"], red_4_items=BUILD)
+        seen = lamp_run(tracker, [{"red.4.spell": [150, 36]}] * 5, start=1.0, red_4_spells=["引燃", icon], red_4_items=BUILD)
+        return next(step for step in seen if step)["red.4.cooldowns"]["spell.1"]
+    start, end = used("海克斯闪现")
+    assert [start, end] == used(UNKNOWN) and end - start == 150          # 和看到暗着的闪现一样，从第一帧暗的算起
+
+
+def test_hexflash_seen_first_means_flash_is_down():
+    """识别接上时格子里已经是海克斯闪现：闪现在冷却，不知道还剩多久（只显示暗着）；闪现换回来亮够 1.5 秒就结束。"""
+    tracker = Tracker()
+    hexflash = dict(blue_4_spells=["治疗术", "海克斯闪现"], blue_4_items=BUILD)
+    seen = lamp_run(tracker, [{"blue.4.spell": [160, 140]}] * 10, **hexflash)
+    assert next(step for step in seen if step)["blue.4.cooldowns"]["spell.1"][1] is None
+    seen = lamp_run(tracker, [{"blue.4.spell": [160, 172]}] * 15, start=2.0, blue_4_spells=["治疗术", "闪现"], blue_4_items=BUILD)
+    assert [step["blue.4.cooldowns"] for step in seen if step] == [{}]
+
+
 def test_item_cooldowns_only_for_long_ones():
     tracker = Tracker()
     build = ["铁板靴", None, None, "耀光", "中娅沙漏", "黄昏与黎明"]
@@ -1213,11 +1272,14 @@ def announce_frame(key: str) -> np.ndarray:
 
 @pytest.mark.parametrize("key, side, count", [
     ("red2", "red", 2), ("red3", "red", 3), ("red4", "red", 4),
-    ("blue2", "blue", 2), ("blue3", "blue", 3), ("blue4", "blue", 4), ("blueskin2", "blue", 2), ("blue2faint", "blue", 2)])
+    ("blue2", "blue", 2), ("blue3", "blue", 3), ("blue4", "blue", 4), ("blueskin2", "blue", 2), ("blue2faint", "blue", 2),
+    ("bluepink2", "blue", 2), ("bluepink3", "blue", 3)])
 def test_reads_multikill_announcements(reader, key, side, count):
     """红方粉白字、蓝方浅青字；蓝方有一种亮蓝紫底板的样式（皮肤特效）也认得出。
     blue4 是 10-18 测试赛 15:11 漏掉的那条（蓝方“四”的模板就是拿它做的）；blue2faint 是 10-15 录像 902.6 秒的一帧，
-    “二”的两道细横被视频压缩抹淡，严格门槛下整个字不见了，要靠数字那一块的宽门槛。"""
+    “二”的两道细横被视频压缩抹淡，严格门槛下整个字不见了，要靠数字那一块的宽门槛。
+    bluepink2 / bluepink3 是 10-26 第一局 13:54、13:58 蓝方卡莎的二连破、三连破：皮肤自带粉紫色底板、粉白色字，
+    按颜色是红方，三杀因此记给了红方；现在看开头写的是“蓝”还是“红”。"""
     announce = reader.announcer.read(announce_frame(key))
     assert announce is not None and (announce["side"], announce["count"]) == (side, count)
 
@@ -1229,12 +1291,12 @@ def test_other_announcements_are_not_multikills(reader, key):
     assert reader.announcer.read(np.zeros((1264, 2800, 3), np.uint8)) is None
 
 
-def multikill_run(tracker, steps, start=0.0):
-    """steps: 每 0.2 秒一份 (announce, {人头})。返回发出的 game.multikill。"""
+def multikill_run(tracker, steps, start=0.0, side="red"):
+    """steps: 每 0.2 秒一份 (announce, {人头})，人头是 side 这一方的。返回发出的 game.multikill。"""
     out = []
     for i, (announce, kills) in enumerate(steps):
-        values = {f"red.{index}.kda": (count, 0, 0) for index, count in kills.items()}
-        values.update({f"red.{index}.gold": 5000 for index in kills})
+        values = {f"{side}.{index}.kda": (count, 0, 0) for index, count in kills.items()}
+        values.update({f"{side}.{index}.gold": 5000 for index in kills})
         reading = {"clock": 600 + int((start + i * 0.2)), "panel": True, "values": values}
         if announce:
             reading["announce"] = {"side": announce[0], "count": announce[1], "score": 0.9}
@@ -1256,6 +1318,27 @@ def test_multikill_banner_is_reported_once_with_its_owner():
     assert [(c["index"], c["count"]) for c in seen] == [(1, 3)]
 
 
+def test_multikill_owner_is_the_one_whose_streak_matches():
+    """10-26 第一局 13:49–13:58：蓝方卡莎（下路）三杀，中单在她第二、第三个人头之间也拿了人头，随后也有一条二连破。
+    按“人头离播报最近”会把卡莎的二连破记给中单；现在找连杀数和“几连破”对得上的那个人。"""
+    tracker = Tracker()
+    kills = {0: 0, 1: 0, 2: 3, 3: 4, 4: 0}
+    steps = [(None, kills)] * 5                                                  # 0–1 秒
+    kills = {**kills, 3: 5}
+    steps += [(None, kills)] * 15                                                # 1 秒：卡莎第一个
+    kills = {**kills, 3: 6}
+    steps += [(None, kills)] * 5                                                 # 4 秒：卡莎第二个
+    kills = {**kills, 2: 4}
+    steps += [(None, kills)] * 5                                                 # 5 秒：中单一个
+    steps += [(("blue", 2), kills)] * 4 + [(None, kills)] * 6                    # 6 秒：卡莎的二连破
+    kills = {**kills, 2: 5, 3: 7}
+    steps += [(None, kills)] * 10                                                # 8 秒：卡莎第三个、中单第二个
+    steps += [(("blue", 3), kills)] * 4 + [(None, kills)] * 3                    # 10 秒：卡莎的三连破
+    steps += [(("blue", 2), kills)] * 4 + [(None, kills)] * 15                   # 11.4 秒：中单的二连破
+    seen = multikill_run(tracker, steps, side="blue")
+    assert [(c["side"], c["index"], c["count"]) for c in seen] == [("blue", 3, 2), ("blue", 3, 3), ("blue", 2, 2)]
+
+
 def test_multikill_waits_for_the_kill_then_gives_up():
     tracker = Tracker()
     kills = {index: 0 for index in range(5)}
@@ -1264,8 +1347,8 @@ def test_multikill_waits_for_the_kill_then_gives_up():
     late = {**kills, 3: 2}
     steps = [(("red", 2), kills)] * 4 + [(("red", 2), late)] * 4 + [(None, late)] * 5
     assert [(c["index"], c["count"]) for c in multikill_run(tracker, steps, start=1.0)] == [(3, 2)]
-    # 怎么也等不到人头：不知道是谁，照报
-    seen = multikill_run(tracker, [(("red", 2), late)] * 4 + [(None, late)] * 20, start=10.0)
+    # 怎么也等不到人头（上一个人头是十几秒前的）：不知道是谁，照报
+    seen = multikill_run(tracker, [(("red", 2), late)] * 4 + [(None, late)] * 20, start=15.0)
     assert [(c["index"], c["count"]) for c in seen] == [(None, 2)]
 
 

@@ -20,7 +20,8 @@
     两行都多了或者都没多（回放、面板收起）就不猜，留给导播点。
   · 多杀：以游戏自己的播报为准（“红方三连破”），同一条播报连续两次读成一样才报，一条播报只报一次。
     数字认不出来时，同一方不久前刚报过 N 连破就当作 N+1（二、三连破之后 15 秒内，四连破之后 30 秒内）。
-    是谁：这一方刚涨了人头的那名选手（人头和播报差不多同时出现，前后等几秒）；原生面板收起时读不到人头，
+    是谁：这一方在播报前后几秒内涨了人头、连杀数正好是 N 的那名选手（相邻两个人头相隔 12 秒以内算一串）；
+    一时没有对得上的就等一会儿（人头可能晚一点读到），等不到就取最接近的。原生面板收起时读不到人头，
     不等，报“不知道是谁”。
   · 血条：前后两次读数差不多才算读稳；和报过的差 2% 以上才报，最多每秒 5 次（十个人一起报）。
     资源条的颜色（蓝 / 黄）连续 5 次一样才换。阵亡时读不到，不报；面板上阵亡的人血条按空的画。
@@ -28,6 +29,8 @@
     读满为止。原生图标在冷却中是一圈圈慢慢亮回来的，不能拿“亮回来了”当结束（那样最后两三成的时间读条就没了）；
     只有图标已经完全亮了好一会儿、而读条还剩不少的时候（技能急速让冷却变短了，或者那一下其实不是用掉），才提前结束。
     惩戒这种充能的、不知道冷却多久的，只报“暗着”，完全亮了再结束。
+    替身图标（cooldowns.yaml 的 standins，带了海克斯闪现符文的人闪现用掉后格子里换成“海克斯闪现”）：
+    面板上报真身（闪现）；格子里是替身的这段时间亮暗一概不管，闪现的读条从它自己变暗的那一刻照走。
 """
 from __future__ import annotations
 
@@ -71,7 +74,11 @@ ULT_STEP = 0.05                 # 大招进度变化超过这么多才报一次
 ULT_READY = 0.93                # 绿色占到这么多算转好了（圆点边缘有一圈描边，读不到 1）
 ANNOUNCE_CONFIRM = 2            # 多杀播报连续这么多次读成同一个才报
 ANNOUNCE_GONE = 0.6             # 播报消失这么久，下一条才算新的
-KILL_BEFORE, KILL_AFTER = 6.0, 2.5      # 播报之前这么多秒内、之后这么多秒内涨了人头的，才可能是它的主人
+# 播报之前这么多秒内、之后这么多秒内涨了人头的，才可能是它的主人。团战里几个人头接连发生时，游戏的播报一条条排队放，
+# 多杀播报可能比触发它的人头晚好几秒（10-26 第一局 06:32 的二连破晚了 8 秒）；有连杀数对账，窗口放宽也不容易找错人
+KILL_BEFORE, KILL_AFTER = 10.0, 2.5
+STREAK_GAP = 12.0               # 同一个人相邻两次击杀相隔不超过这么久，算同一串连杀（游戏约 10 秒，人头读到得晚一点，留些余量）
+KILL_LOG = 10                   # 每人留最近这么多次击杀的时刻
 NEXT_WITHIN = {2: 15.0, 3: 15.0, 4: 30.0}   # 认不出几连破时：同一方 N 连破之后这么多秒内的，当作 N+1 连破
 LIGHT_ON, LIGHT_OFF = 0.8, 0.5  # 图标亮度相对它最亮时的比例：高于前者算亮着，低于后者算暗了（刚用掉时约 0.25）
 READY = 0.97                    # 冷却中图标从 0.25 左右匀速亮回到 1，到这么亮才算原生的冷却真的转好了
@@ -94,6 +101,7 @@ class Lamp:
         self.lit = Slot()           # 去抖后的亮 / 暗
         self.dark_since = None      # 这一轮第一次读到“暗”的游戏时间
         self.ready_since = None     # 这一轮第一次读到“完全亮了”的游戏时间
+        self.standin = False        # 格子里现在是替身图标（海克斯闪现）
 HEARTBEAT_SECONDS = 2.0
 
 
@@ -152,7 +160,7 @@ class Tracker:
         self.fields: dict[str, Debouncer] = {}
         self.slots: dict[str, Slot] = {}            # "blue.0.items.3"、"red.2.respawn" → 去抖后的值
         self.changed_at: dict[str, float] = {}      # 每个字段上次提交的时间
-        self.kill_at: dict[str, float] = {}         # "red.1" → 上次涨人头的时间
+        self.kill_log: dict[str, list[float]] = {}  # "red.1" → 最近几次涨人头的时间（一下子涨两个就记两次）
         self.banner = None                          # 正在显示的多杀播报：{"side", "count", "streak", "seen", "sent"}
         self.multikills: list[dict] = []            # 已经认出、还在等着确定是谁的多杀：{"side", "count", "at", "t"}
         self.last_multikill: dict[str, tuple[int, float]] = {}      # 每一方上一次多杀：(几连破, 时间)
@@ -182,7 +190,9 @@ class Tracker:
             out[path] = committed
             self.changed_at[path] = now
             if path.endswith(".kills") and path.count(".") == 2 and before is not None and committed > before:
-                self.kill_at[path[:-len(".kills")]] = now           # 谁、什么时候涨了人头（给多杀播报找主人）
+                log = self.kill_log.setdefault(path[:-len(".kills")], [])      # 谁、什么时候涨了人头（给多杀播报找主人）
+                log.extend([now] * (committed - before))
+                del log[:-KILL_LOG]
 
     def _values(self, reading: dict, now: float) -> dict:
         values, out = reading["values"], {}
@@ -245,6 +255,11 @@ class Tracker:
         seconds = timing["items"].get(name)
         return seconds if seconds and seconds > timing.get("show_above", 0) else False
 
+    def _standin(self, key: str) -> bool:
+        """这个技能格里现在是不是替身图标（认出来的最后一个样子；压暗了认不出时保持原样）。"""
+        icon = self.slots.get(f"{key}.icon")
+        return bool(icon and icon.known and icon.value in (self.timing.get("standins") or {}))
+
     def _same(self, one, other) -> bool:
         """是不是同一件东西（“传送”和“解封的传送”是同一个技能的两个样子）。"""
         return one == other or any(one in group and other in group for group in self.timing.get("shared", []))
@@ -267,6 +282,20 @@ class Tracker:
                     lamp.name, lamp.peak = name, value
                 if name is None:
                     continue
+                if kind == "spell" and self._standin(f"{player}.spells.{index}"):
+                    # 格子里是替身（海克斯闪现）：真身一定还在冷却，替身的亮暗不管（用一次替身格子就暗一阵，
+                    # 当成“又用了一次闪现”会把读条重置）。实际画面上闪现一用掉格子就换成了暗着的替身，往往等不到
+                    # “暗了”确认就先认出了替身：这时从刚才开始变暗的那一刻起读条。之前一直没看到亮着的闪现
+                    # （刚接上识别）就不知道还剩多久，只显示暗着
+                    if not lamp.standin and entry not in running:
+                        seconds = self._duration(player, kind, name)
+                        start = lamp.dark_since if lamp.dark_since is not None else t
+                        fresh = lamp.lit.known and lamp.lit.value
+                        running[entry] = [round(start, 1), round(start + seconds, 1) if fresh and seconds else None]
+                        changed.add(player)
+                    lamp.standin, lamp.dark_since, lamp.ready_since = True, None, None
+                    continue
+                lamp.standin = False
                 lamp.peak = max(lamp.peak, value)
                 if lamp.peak < LIGHT_FLOOR:
                     continue
@@ -339,9 +368,11 @@ class Tracker:
                     out[path] = value
             elif path.endswith(".spells"):
                 changed = False
+                standins = self.timing.get("standins") or {}
                 for index, spell in enumerate(value):
                     if spell not in (UNKNOWN, None):                    # 冷却中被压暗时认不出，保持原样
-                        changed |= self._slot(f"{path}.{index}").offer(spell)
+                        self._slot(f"{path}.{index}.icon").offer(spell)     # 格子里现在是真身还是替身
+                        changed |= self._slot(f"{path}.{index}").offer(standins.get(spell, spell))     # 面板上只报真身
                 if changed:
                     out[path] = self._row(path, 2)
             elif path.endswith(".rune"):
@@ -427,20 +458,38 @@ class Tracker:
                     banner["sent"] = count
                     self.last_multikill[side] = (count, now)
                     self.multikills.append({"side": side, "count": count, "at": now, "t": t})
-        # 给认出的多杀找主人：这一方在播报前后几秒内涨了人头、最近的那一个
         for pending in list(self.multikills):
-            candidates = [(abs(self.kill_at[key] - pending["at"]), int(key.split(".")[1])) for key in self.kill_at
-                          if key.startswith(pending["side"] + ".")
-                          and pending["at"] - KILL_BEFORE <= self.kill_at[key] <= pending["at"] + KILL_AFTER]
-            if not candidates and panel and now - pending["at"] < KILL_AFTER:
+            owner = self._owner(pending)
+            if (owner is None or owner[0] > 0) and panel and now - pending["at"] < KILL_AFTER:
                 continue                        # 人头可能比播报晚一点点才读到，再等等（面板收起时读不到人头，不等）
             self.multikills.remove(pending)
             command = {"type": "game.multikill", "source": "vision", "side": pending["side"], "count": pending["count"],
-                       "index": min(candidates)[1] if candidates else None}
+                       "index": owner[2] if owner else None}
             if pending["t"] is not None:
                 command["t"] = round(pending["t"], 1)
             commands.append(command)
         return commands
+
+    def _owner(self, pending: dict) -> tuple[int, float, int] | None:
+        """多杀播报是谁的：这一方在播报前后几秒内涨了人头的人里，连杀数和“几连破”对得上的那个；
+        都对不上（或者对得上的不止一个）取差得最少、人头离播报最近的。返回 (差几个, 离播报几秒, 第几路)，没人涨人头返回 None。
+
+        只看“谁的人头离播报最近”不够：团战里同一方几个人的人头交替着涨（10-26 第一局 13:54–13:58，卡莎三杀，
+        中单在她第二、第三个人头之间也拿了两个），最近的那个常常不是播报的主人。"""
+        ranked = []
+        for player, times in self.kill_log.items():
+            side, index = player.split(".")
+            near = [at for at in times if pending["at"] - KILL_BEFORE <= at <= pending["at"] + KILL_AFTER]
+            if side != pending["side"] or not near:
+                continue
+            before = [at for at in near if at <= pending["at"]]
+            pivot = max(before) if before else min(near)            # 播报跟在触发它的那个人头后面；面板慢了就取播报之后的第一个
+            chain = [at for at in times if at <= pivot]
+            streak = 1
+            while streak < len(chain) and chain[-streak] - chain[-streak - 1] <= STREAK_GAP:
+                streak += 1
+            ranked.append((abs(streak - pending["count"]), abs(pivot - pending["at"]), int(index)))
+        return min(ranked) if ranked else None
 
     # ---- 野怪 ----
 
